@@ -1,0 +1,267 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: #f5f5f5;
+}
+
+header {
+    background-color: #4CAF50;
+    color: white;
+    padding: 1rem;
+    text-align: center;
+}
+
+header nav {
+    margin-top: 1rem;
+}
+
+header nav a {
+    color: white;
+    text-decoration: none;
+    margin: 0 1rem;
+    padding: 0.5rem 1rem;
+    border-radius: 4px;
+    transition: background-color 0.3s;
+}
+
+header nav a:hover,
+header nav a.active {
+    background-color: rgba(0, 0, 0, 0.1);
+}
+
+.container {
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+}
+
+.filters {
+    background-color: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    margin-bottom: 2rem;
+}
+
+.filters h3 {
+    margin-top: 0;
+}
+
+#search-form {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    align-items: end;
+}
+
+.form-group {
+    margin-bottom: 0;
+}
+
+label {
+    display: block;
+    margin-bottom: 0.3rem;
+    font-weight: bold;
+    color: #666;
+}
+
+input[type="number"],
+input[type="text"],
+select {
+    width: 100%;
+    padding: 0.5rem;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 1rem;
+    box-sizing: border-box;
+}
+
+button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1rem;
+    transition: background-color 0.3s;
+    height: 38px;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+#profiles-container {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+    gap: 1.5rem;
+    margin-bottom: 2rem;
+    min-height: 200px;
+    align-items: stretch;
+}
+
+.profile-card {
+    background-color: white;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    overflow: hidden;
+    transition: transform 0.3s, box-shadow 0.3s;
+    display: flex;
+    flex-direction: column;
+    min-height: 400px;
+    width: 100%;
+    position: relative;
+}
+
+.profile-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+
+.profile-card-image {
+    width: 100%;
+    height: 250px;
+    overflow: hidden;
+    background-color: #f0f0f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.profile-card img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center;
+    transition: transform 0.3s ease;
+}
+
+.profile-card:hover img {
+    transform: scale(1.05);
+}
+
+.profile-card-content {
+    padding: 1rem;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+.profile-card h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.2rem;
+}
+
+.profile-card p {
+    margin: 0.3rem 0;
+    color: #666;
+}
+
+.profile-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-top: 0.5rem;
+}
+
+.tag {
+    background-color: #e0e0e0;
+    padding: 0.2rem 0.6rem;
+    border-radius: 12px;
+    font-size: 0.8rem;
+}
+
+.profile-actions {
+    display: flex;
+    justify-content: space-between;
+    margin-top: auto;
+}
+
+.profile-actions button {
+    padding: 0.4rem 1rem;
+    font-size: 0.9rem;
+}
+
+.like-button {
+    background-color: #ff4081;
+}
+
+.like-button:hover {
+    background-color: #f50057;
+}
+
+.loading {
+    text-align: center;
+    padding: 2rem;
+    font-size: 1.2rem;
+    color: #666;
+}
+
+.pagination {
+    text-align: center;
+    margin: 2rem 0;
+}
+
+#load-more {
+    padding: 0.8rem 2rem;
+}
+
+/* État de chargement pour les images */
+.profile-card-image::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #f0f0f0;
+    opacity: 0;
+    transition: opacity 0.3s;
+    z-index: 1;
+}
+
+.profile-card-image.loading::before {
+    opacity: 1;
+}
+
+/* Styles pour les profils vides ou en erreur */
+.profile-card.error {
+    border: 1px solid #ffcdd2;
+    background-color: #ffebee;
+}
+
+.profile-card.error::after {
+    content: "Impossible de charger ce profil";
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 250px;
+    color: #d32f2f;
+    font-style: italic;
+}
+
+@media (max-width: 768px) {
+    #search-form {
+        grid-template-columns: 1fr;
+    }
+    
+    header nav a {
+        margin: 0 0.5rem;
+        padding: 0.3rem 0.6rem;
+    }
+    
+    #profiles-container {
+        grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    }
+    
+    .profile-card {
+        min-height: 350px;
+    }
+    
+    .profile-card img {
+        height: 200px;
+    }
+}

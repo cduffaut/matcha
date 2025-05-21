@@ -1,0 +1,2 @@
+malgré les derniers changements la page ne s'affiche toujours pas correctement.
+Toutes les pages s'affichent bien sauf elle.
