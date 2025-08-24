@@ -1,7 +1,6 @@
 package user
 
 import (
-	"database/sql"
 	"time"
 )
 
@@ -22,20 +21,31 @@ type SexualPreference string
 type Profile struct {
 	ID               int              `db:"id"`
 	UserID           int              `db:"user_id"`
+	FirstName        string           `db:"first_name"`
+	LastName         string           `db:"last_name"`
 	Gender           Gender           `db:"gender"`
 	SexualPreference SexualPreference `db:"sexual_preference"`
 	Biography        string           `db:"biography"`
 	BirthDate        *time.Time       `db:"birth_date"`
+	LocationName     string           `db:"location_name"`
 	Latitude         float64          `db:"latitude"`
 	Longitude        float64          `db:"longitude"`
-	LocationName     string           `db:"location_name"`
-	LastConnection   sql.NullTime     `db:"last_connection"`
-	IsOnline         bool             `db:"is_online"`
 	FameRating       int              `db:"fame_rating"`
-	Tags             []Tag            `db:"-"`
-	Photos           []Photo          `db:"-"`
+	IsOnline         bool             `db:"is_online"`
+	LastConnection   *time.Time       `db:"last_connection"`
 	CreatedAt        time.Time        `db:"created_at"`
 	UpdatedAt        time.Time        `db:"updated_at"`
+	Photos           []Photo          `db:"-"`
+	Tags             []Tag            `db:"-"`
+}
+
+// BlockedUser représente un utilisateur bloqué
+type BlockedUser struct {
+	ID        int         `db:"id"`
+	BlockerID int         `db:"blocker_id"`
+	BlockedID int         `db:"blocked_id"`
+	CreatedAt time.Time   `db:"created_at"`
+	User      interface{} `db:"-"` // Informations de l'utilisateur bloqué
 }
 
 // Tag représente un tag d'intérêt
@@ -73,6 +83,20 @@ type UserLike struct {
 	Liker     interface{} `db:"-"`
 }
 
+// ReportData représente un signalement avec informations détaillées
+type ReportData struct {
+	ID           int         `json:"id"`
+	ReporterID   int         `json:"reporter_id"`
+	ReportedID   int         `json:"reported_id"`
+	Reason       string      `json:"reason"`
+	CreatedAt    time.Time   `json:"created_at"`
+	IsProcessed  bool        `json:"is_processed"`
+	ProcessedAt  *time.Time  `json:"processed_at"`
+	AdminComment string      `json:"admin_comment"`
+	ReporterInfo interface{} `json:"reporter_info"`
+	ReportedInfo interface{} `json:"reported_info"`
+}
+
 // ProfileRepository est l'interface pour accéder aux données des profils
 type ProfileRepository interface {
 	GetByUserID(userID int) (*Profile, error)
@@ -95,11 +119,18 @@ type ProfileRepository interface {
 	GetLikesForUser(userID int) ([]UserLike, error)
 	CheckIfLiked(likerID, likedID int) (bool, error)
 	CheckIfMatched(user1ID, user2ID int) (bool, error)
-	BlockUser(blockerID, blockedID int) error
 	IsBlocked(userID, blockedID int) (bool, error)
 	ReportUser(reporterID, reportedID int, reason string) error
 	GetAllProfiles() ([]*Profile, error)
 	UpdateLastConnection(userID int) error
 	SetOnline(userID int, isOnline bool) error
 	UpdateFameRating(userID int) error
+	BlockUser(blockerID, blockedID int) error
+	UnblockUser(blockerID, blockedID int) error
+	GetBlockedUsers(userID int) ([]BlockedUser, error)
+	CleanupInactiveUsers(timeoutMinutes int) error
+	GetUserOnlineStatus(userID int) (bool, *time.Time, error)
+	// Méthodes pour les rapports (admin)
+	GetAllReports() ([]ReportData, error)
+	ProcessReport(reportID int, adminComment, action string) error
 }

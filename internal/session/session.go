@@ -35,16 +35,12 @@ func NewManager(cookieName string) *Manager {
 
 // CreateSession crée une nouvelle session pour un utilisateur
 func (m *Manager) CreateSession(w http.ResponseWriter, user *models.User) (string, error) {
-	fmt.Printf("⚠️ Création de session pour: %s (ID: %d)\n", user.Username, user.ID)
 
 	// Générer un token de session
 	sessionToken, err := generateRandomToken(32)
 	if err != nil {
-		fmt.Printf("⚠️ Erreur génération token: %v\n", err)
 		return "", fmt.Errorf("erreur lors de la génération du token de session: %w", err)
 	}
-
-	fmt.Printf("⚠️ Token généré: %s\n", sessionToken)
 
 	// Créer la session
 	session := Session{
@@ -56,39 +52,39 @@ func (m *Manager) CreateSession(w http.ResponseWriter, user *models.User) (strin
 	// Stocker la session
 	m.Sessions[sessionToken] = session
 
-	fmt.Printf("⚠️ Session stockée: %+v\n", session)
-
-	// Créer le cookie
+	// CORRECTION : Créer le cookie avec les paramètres corrects
 	cookie := http.Cookie{
 		Name:     m.CookieName,
 		Value:    sessionToken,
 		Expires:  session.ExpiresAt,
 		HttpOnly: true,
 		Path:     "/",
-		SameSite: http.SameSiteStrictMode,
-		Secure:   false, // À mettre à false en développement
+		SameSite: http.SameSiteLaxMode, // Important pour les tests
+		Secure:   false,                // False en développement
 	}
 
 	// Définir le cookie dans la réponse
 	http.SetCookie(w, &cookie)
-
-	fmt.Printf("⚠️ Cookie défini: %+v\n", cookie)
 
 	return sessionToken, nil
 }
 
 // GetSession récupère une session à partir d'une requête
 func (m *Manager) GetSession(r *http.Request) (*Session, error) {
+	for _, cookie := range r.Cookies() {
+		fmt.Printf("  - %s = %s\n", cookie.Name, cookie.Value)
+	}
+
 	// Récupérer le cookie de session
 	cookie, err := r.Cookie(m.CookieName)
 	if err != nil {
-		return nil, fmt.Errorf("pas de session trouvée")
+		return nil, fmt.Errorf("pas de session trouvée: %w", err)
 	}
 
 	// Récupérer la session
 	session, exists := m.Sessions[cookie.Value]
 	if !exists {
-		return nil, fmt.Errorf("session invalide")
+		return nil, fmt.Errorf("session invalide: %s", cookie.Value)
 	}
 
 	// Vérifier si la session a expiré
@@ -98,6 +94,15 @@ func (m *Manager) GetSession(r *http.Request) (*Session, error) {
 	}
 
 	return &session, nil
+}
+
+// getSessionKeys retourne les clés des sessions pour le debug
+func (m *Manager) getSessionKeys() []string {
+	keys := make([]string, 0, len(m.Sessions))
+	for k := range m.Sessions {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // DestroySession détruit une session
@@ -118,8 +123,8 @@ func (m *Manager) DestroySession(w http.ResponseWriter, r *http.Request) error {
 		Expires:  time.Now().Add(-1 * time.Hour),
 		HttpOnly: true,
 		Path:     "/",
-		SameSite: http.SameSiteStrictMode,
-		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		Secure:   false,
 	}
 
 	http.SetCookie(w, &expiredCookie)

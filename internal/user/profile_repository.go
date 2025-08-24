@@ -1,3 +1,4 @@
+// internal/user/profile_repository.go
 package user
 
 import (
@@ -20,7 +21,6 @@ func NewPostgresProfileRepository(db *sql.DB) ProfileRepository {
 
 // GetByUserID récupère le profil d'un utilisateur par son ID
 func (r *PostgresProfileRepository) GetByUserID(userID int) (*Profile, error) {
-	// Récupérer les informations de base du profil
 	query := `
         SELECT user_id, gender, sexual_preferences, biography, birth_date, fame_rating, 
                latitude, longitude, location_name, created_at, updated_at
@@ -31,6 +31,7 @@ func (r *PostgresProfileRepository) GetByUserID(userID int) (*Profile, error) {
 	profile := &Profile{UserID: userID}
 	var gender, sexPref sql.NullString
 	var bio sql.NullString
+	var birthDate sql.NullTime // Ajout de cette variable
 	var lat, long sql.NullFloat64
 	var locName sql.NullString
 
@@ -39,7 +40,7 @@ func (r *PostgresProfileRepository) GetByUserID(userID int) (*Profile, error) {
 		&gender,
 		&sexPref,
 		&bio,
-		&profile.BirthDate,
+		&birthDate, // Utiliser birthDate au lieu de &profile.BirthDate
 		&profile.FameRating,
 		&lat,
 		&long,
@@ -54,6 +55,7 @@ func (r *PostgresProfileRepository) GetByUserID(userID int) (*Profile, error) {
 			profile.Gender = ""
 			profile.SexualPreference = ""
 			profile.Biography = ""
+			profile.BirthDate = nil // Initialiser à nil
 			profile.Latitude = 0
 			profile.Longitude = 0
 			profile.LocationName = ""
@@ -73,6 +75,9 @@ func (r *PostgresProfileRepository) GetByUserID(userID int) (*Profile, error) {
 	}
 	if bio.Valid {
 		profile.Biography = bio.String
+	}
+	if birthDate.Valid { // Ajout de cette condition
+		profile.BirthDate = &birthDate.Time
 	}
 	if lat.Valid {
 		profile.Latitude = lat.Float64
@@ -105,7 +110,7 @@ func (r *PostgresProfileRepository) GetByUserID(userID int) (*Profile, error) {
 func (r *PostgresProfileRepository) Create(profile *Profile) error {
 	query := `
         INSERT INTO user_profiles (
-            user_id, gender, sexual_preferences, biography, fame_rating, 
+            user_id, gender, sexual_preferences, biography, birth_date, fame_rating, 
             latitude, longitude, location_name
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         ON CONFLICT (user_id) DO NOTHING
@@ -134,10 +139,16 @@ func (r *PostgresProfileRepository) Create(profile *Profile) error {
 
 // Update met à jour un profil utilisateur
 func (r *PostgresProfileRepository) Update(profile *Profile) error {
+	// CORRECTION: Requête SQL simplifiée et correcte
 	query := `
         UPDATE user_profiles
-        SET gender = $2, sexual_preferences = $3, biography = $4,
-            birth_date = $5, latitude = $6, longitude = $7, location_name = $8, 
+        SET gender = $2, 
+            sexual_preferences = $3, 
+            biography = $4, 
+            birth_date = $5, 
+            latitude = $6, 
+            longitude = $7, 
+            location_name = $8,
             updated_at = CURRENT_TIMESTAMP
         WHERE user_id = $1
         RETURNING updated_at
@@ -169,6 +180,13 @@ func (r *PostgresProfileRepository) Update(profile *Profile) error {
 
 	profile.UpdatedAt = updatedAt
 	fmt.Printf("SQL Update Success: Profil %d mis à jour\n", profile.UserID)
+
+	// CORRECTION: Mettre à jour le fame rating séparément
+	if err := r.UpdateFameRating(profile.UserID); err != nil {
+		fmt.Printf("Erreur mise à jour fame rating: %v\n", err)
+		// Ne pas faire échouer toute la mise à jour pour ça
+	}
+
 	return nil
 }
 
@@ -267,6 +285,22 @@ func (r *PostgresProfileRepository) GetAllTags() ([]Tag, error) {
 	return tags, nil
 }
 
+// GetTagByID récupère un tag par son ID - MÉTHODE MANQUANTE AJOUTÉE
+func (r *PostgresProfileRepository) GetTagByID(tagID int) (*Tag, error) {
+	query := "SELECT id, name, created_at FROM tags WHERE id = $1"
+
+	var tag Tag
+	err := r.db.QueryRow(query, tagID).Scan(&tag.ID, &tag.Name, &tag.CreatedAt)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil, fmt.Errorf("tag avec ID %d non trouvé", tagID)
+		}
+		return nil, fmt.Errorf("erreur lors de la récupération du tag: %w", err)
+	}
+
+	return &tag, nil
+}
+
 // AddPhoto ajoute une photo à un utilisateur
 func (r *PostgresProfileRepository) AddPhoto(photo *Photo) error {
 	// Compter les photos actuelles
@@ -327,15 +361,21 @@ func (r *PostgresProfileRepository) RemovePhoto(photoID int) error {
 
 	// Si c'était une photo de profil, définir une autre photo comme photo de profil
 	if isProfile {
+		// CORRECTION : Utiliser une sous-requête au lieu d'ORDER BY direct
 		_, err = r.db.Exec(`
             UPDATE user_photos
             SET is_profile = true
-            WHERE user_id = $1
-            ORDER BY created_at
-            LIMIT 1
+            WHERE id = (
+                SELECT id FROM user_photos 
+                WHERE user_id = $1 
+                ORDER BY created_at 
+                LIMIT 1
+            )
         `, userID)
+		// Ignorer l'erreur si pas d'autres photos
 		if err != nil {
-			return fmt.Errorf("erreur lors de la mise à jour de la photo de profil: %w", err)
+			// Log mais ne pas faire échouer - normal si plus de photos
+			fmt.Printf("Info: Aucune autre photo à définir comme profil pour user %d\n", userID)
 		}
 	}
 
@@ -367,6 +407,26 @@ func (r *PostgresProfileRepository) SetProfilePhoto(photoID int) error {
 	}
 
 	return nil
+}
+
+// IsProfilePhoto vérifie si une photo est une photo de profil - MÉTHODE MANQUANTE AJOUTÉE
+func (r *PostgresProfileRepository) IsProfilePhoto(userID int, photoID int) (bool, error) {
+	var isProfile bool
+	query := `
+		SELECT is_profile 
+		FROM user_photos 
+		WHERE id = $1 AND user_id = $2
+	`
+
+	err := r.db.QueryRow(query, photoID, userID).Scan(&isProfile)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, fmt.Errorf("photo non trouvée pour cet utilisateur")
+		}
+		return false, fmt.Errorf("erreur lors de la vérification de la photo: %w", err)
+	}
+
+	return isProfile, nil
 }
 
 // GetPhotosByUserID récupère toutes les photos d'un utilisateur
@@ -611,7 +671,7 @@ func (r *PostgresProfileRepository) CheckIfLiked(likerID, likedID int) (bool, er
 // GetAllProfiles récupère tous les profils
 func (r *PostgresProfileRepository) GetAllProfiles() ([]*Profile, error) {
 	query := `
-        SELECT user_id, gender, sexual_preferences, biography, fame_rating, 
+        SELECT user_id, gender, sexual_preferences, biography, birth_date, fame_rating, 
                latitude, longitude, location_name, created_at, updated_at
         FROM user_profiles
     `
@@ -627,6 +687,7 @@ func (r *PostgresProfileRepository) GetAllProfiles() ([]*Profile, error) {
 		var profile Profile
 		var gender, sexPref sql.NullString
 		var bio sql.NullString
+		var birthDate sql.NullTime // Ajout de cette variable
 		var lat, long sql.NullFloat64
 		var locName sql.NullString
 
@@ -635,7 +696,7 @@ func (r *PostgresProfileRepository) GetAllProfiles() ([]*Profile, error) {
 			&gender,
 			&sexPref,
 			&bio,
-			&profile.BirthDate,
+			&birthDate, // Utiliser birthDate au lieu de &profile.BirthDate
 			&profile.FameRating,
 			&lat,
 			&long,
@@ -657,6 +718,9 @@ func (r *PostgresProfileRepository) GetAllProfiles() ([]*Profile, error) {
 		}
 		if bio.Valid {
 			profile.Biography = bio.String
+		}
+		if birthDate.Valid { // Ajout de cette condition
+			profile.BirthDate = &birthDate.Time
 		}
 		if lat.Valid {
 			profile.Latitude = lat.Float64
@@ -732,23 +796,40 @@ func (r *PostgresProfileRepository) CheckIfMatched(user1ID, user2ID int) (bool, 
 // UpdateFameRating met à jour le fame rating d'un utilisateur
 func (r *PostgresProfileRepository) UpdateFameRating(userID int) error {
 	// Calcul du fame rating basé sur le nombre de visites, de likes et de matchs
+	// Formule simple : visites = 1 point, likes = 2 points, matchs = 5 points
 	query := `
+        WITH user_stats AS (
+            SELECT 
+                COALESCE(visits.visit_count, 0) as visits,
+                COALESCE(likes.like_count, 0) as likes,
+                COALESCE(matches.match_count, 0) as matches
+            FROM (SELECT 1) dummy
+            LEFT JOIN (
+                SELECT COUNT(*) as visit_count
+                FROM profile_visits 
+                WHERE visited_id = $1
+            ) visits ON true
+            LEFT JOIN (
+                SELECT COUNT(*) as like_count
+                FROM user_likes 
+                WHERE liked_id = $1
+            ) likes ON true
+            LEFT JOIN (
+                SELECT COUNT(*) as match_count
+                FROM user_likes ul1
+                WHERE ul1.liked_id = $1
+                AND EXISTS (
+                    SELECT 1 
+                    FROM user_likes ul2 
+                    WHERE ul2.liker_id = ul1.liked_id 
+                    AND ul2.liked_id = ul1.liker_id
+                )
+            ) matches ON true
+        )
         UPDATE user_profiles
         SET fame_rating = (
-            SELECT 
-                COALESCE((SELECT COUNT(*) FROM profile_visits WHERE visited_id = $1), 0) +
-                COALESCE((SELECT COUNT(*) * 2 FROM user_likes WHERE liked_id = $1), 0) +
-                COALESCE((
-                    SELECT COUNT(*) * 3
-                    FROM user_likes ul1
-                    WHERE ul1.liked_id = $1
-                    AND EXISTS (
-                        SELECT 1 
-                        FROM user_likes ul2 
-                        WHERE ul2.liker_id = ul1.liked_id 
-                        AND ul2.liked_id = ul1.liker_id
-                    )
-                ), 0)
+            SELECT LEAST(100, visits + (likes * 2) + (matches * 5))
+            FROM user_stats
         )
         WHERE user_id = $1
     `
@@ -756,6 +837,354 @@ func (r *PostgresProfileRepository) UpdateFameRating(userID int) error {
 	_, err := r.db.Exec(query, userID)
 	if err != nil {
 		return fmt.Errorf("erreur lors de la mise à jour du fame rating: %w", err)
+	}
+
+	return nil
+}
+
+// UnblockUser débloque un utilisateur
+func (r *PostgresProfileRepository) UnblockUser(blockerID, blockedID int) error {
+	query := `DELETE FROM user_blocks WHERE blocker_id = $1 AND blocked_id = $2`
+
+	_, err := r.db.Exec(query, blockerID, blockedID)
+	if err != nil {
+		return fmt.Errorf("erreur lors du déblocage de l'utilisateur: %w", err)
+	}
+
+	return nil
+}
+
+// GetBlockedUsers récupère la liste des utilisateurs bloqués par un utilisateur
+func (r *PostgresProfileRepository) GetBlockedUsers(userID int) ([]BlockedUser, error) {
+	query := `
+		SELECT ub.id, ub.blocker_id, ub.blocked_id, ub.created_at,
+		       u.username, u.first_name, u.last_name
+		FROM user_blocks ub
+		JOIN users u ON ub.blocked_id = u.id
+		WHERE ub.blocker_id = $1
+		ORDER BY ub.created_at DESC
+	`
+
+	rows, err := r.db.Query(query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("erreur lors de la récupération des utilisateurs bloqués: %w", err)
+	}
+	defer rows.Close()
+
+	var blockedUsers []BlockedUser
+	for rows.Next() {
+		var blocked BlockedUser
+		var username, firstName, lastName string
+
+		err := rows.Scan(
+			&blocked.ID,
+			&blocked.BlockerID,
+			&blocked.BlockedID,
+			&blocked.CreatedAt,
+			&username,
+			&firstName,
+			&lastName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("erreur lors de la lecture d'un utilisateur bloqué: %w", err)
+		}
+
+		// Créer l'objet utilisateur
+		blocked.User = &models.User{
+			ID:        blocked.BlockedID,
+			Username:  username,
+			FirstName: firstName,
+			LastName:  lastName,
+		}
+
+		blockedUsers = append(blockedUsers, blocked)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("erreur lors du parcours des utilisateurs bloqués: %w", err)
+	}
+
+	return blockedUsers, nil
+}
+
+// BlockUser bloque un utilisateur
+func (r *PostgresProfileRepository) BlockUser(blockerID, blockedID int) error {
+	query := `
+        INSERT INTO user_blocks (blocker_id, blocked_id)
+        VALUES ($1, $2)
+        ON CONFLICT (blocker_id, blocked_id) DO NOTHING
+    `
+
+	_, err := r.db.Exec(query, blockerID, blockedID)
+	if err != nil {
+		return fmt.Errorf("erreur lors du blocage de l'utilisateur: %w", err)
+	}
+
+	return nil
+}
+
+// ReportUser enregistre un signalement d'utilisateur
+func (r *PostgresProfileRepository) ReportUser(reporterID, reportedID int, reason string) error {
+	query := `
+		INSERT INTO user_reports (reporter_id, reported_id, reason)
+		VALUES ($1, $2, $3)
+		ON CONFLICT (reporter_id, reported_id) DO UPDATE
+		SET reason = $3, created_at = CURRENT_TIMESTAMP
+	`
+
+	_, err := r.db.Exec(query, reporterID, reportedID, reason)
+	if err != nil {
+		return fmt.Errorf("erreur lors de l'enregistrement du signalement: %w", err)
+	}
+
+	return nil
+}
+
+// GetAllReports récupère tous les signalements avec informations des utilisateurs
+func (r *PostgresProfileRepository) GetAllReports() ([]ReportData, error) {
+	query := `
+		SELECT ur.id, ur.reporter_id, ur.reported_id, ur.reason, ur.created_at,
+		       ur.is_processed, ur.processed_at, ur.admin_comment,
+		       u1.username as reporter_username, u1.first_name as reporter_first_name, u1.last_name as reporter_last_name,
+		       u2.username as reported_username, u2.first_name as reported_first_name, u2.last_name as reported_last_name
+		FROM user_reports ur
+		JOIN users u1 ON ur.reporter_id = u1.id
+		JOIN users u2 ON ur.reported_id = u2.id
+		ORDER BY ur.created_at DESC
+	`
+
+	rows, err := r.db.Query(query)
+	if err != nil {
+		return nil, fmt.Errorf("erreur lors de la récupération des signalements: %w", err)
+	}
+	defer rows.Close()
+
+	var reports []ReportData
+	for rows.Next() {
+		var report ReportData
+		var processedAt sql.NullTime
+		var adminComment sql.NullString
+		var reporterUsername, reporterFirstName, reporterLastName string
+		var reportedUsername, reportedFirstName, reportedLastName string
+
+		err := rows.Scan(
+			&report.ID, &report.ReporterID, &report.ReportedID, &report.Reason, &report.CreatedAt,
+			&report.IsProcessed, &processedAt, &adminComment,
+			&reporterUsername, &reporterFirstName, &reporterLastName,
+			&reportedUsername, &reportedFirstName, &reportedLastName,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("erreur lors de la lecture d'un signalement: %w", err)
+		}
+
+		if processedAt.Valid {
+			report.ProcessedAt = &processedAt.Time
+		}
+		if adminComment.Valid {
+			report.AdminComment = adminComment.String
+		}
+
+		// Créer les informations des utilisateurs
+		report.ReporterInfo = &models.User{
+			ID:        report.ReporterID,
+			Username:  reporterUsername,
+			FirstName: reporterFirstName,
+			LastName:  reporterLastName,
+		}
+
+		report.ReportedInfo = &models.User{
+			ID:        report.ReportedID,
+			Username:  reportedUsername,
+			FirstName: reportedFirstName,
+			LastName:  reportedLastName,
+		}
+
+		reports = append(reports, report)
+	}
+
+	return reports, nil
+}
+
+// GetUserOnlineStatus récupère le statut en ligne d'un utilisateur
+func (r *PostgresProfileRepository) GetUserOnlineStatus(userID int) (bool, *time.Time, error) {
+	query := `
+		SELECT is_online, last_connection
+		FROM user_profiles
+		WHERE user_id = $1
+	`
+
+	var isOnline bool
+	var lastConnection sql.NullTime
+
+	err := r.db.QueryRow(query, userID).Scan(&isOnline, &lastConnection)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return false, nil, nil
+		}
+		return false, nil, fmt.Errorf("erreur lors de la récupération du statut: %w", err)
+	}
+
+	var lastConn *time.Time
+	if lastConnection.Valid {
+		lastConn = &lastConnection.Time
+	}
+
+	return isOnline, lastConn, nil
+}
+
+func (r *PostgresProfileRepository) SetOnline(userID int, isOnline bool) error {
+	// Vérifier les colonnes...
+	var columnsExist bool
+	err := r.db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 
+			FROM information_schema.columns 
+			WHERE table_name = 'user_profiles' 
+			AND column_name IN ('is_online', 'last_connection')
+			GROUP BY table_name
+			HAVING COUNT(*) = 2
+		)
+	`).Scan(&columnsExist)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la vérification des colonnes: %w", err)
+	}
+
+	if !columnsExist {
+		_, err = r.db.Exec(`
+			ALTER TABLE user_profiles 
+			ADD COLUMN IF NOT EXISTS is_online BOOLEAN DEFAULT FALSE,
+			ADD COLUMN IF NOT EXISTS last_connection TIMESTAMP
+		`)
+		if err != nil {
+			return fmt.Errorf("erreur lors de l'ajout des colonnes: %w", err)
+		}
+	}
+
+	// CORRECTION : Utiliser UTC explicitement
+	nowUTC := time.Now().UTC()
+
+	// Mettre à jour avec timestamp UTC explicite
+	query := `
+		UPDATE user_profiles
+		SET is_online = $2, 
+			last_connection = $3
+		WHERE user_id = $1
+	`
+	_, err = r.db.Exec(query, userID, isOnline, nowUTC)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la mise à jour du statut: %w", err)
+	}
+
+	return nil
+}
+
+// Nettoyer les utilisateurs inactifs
+func (r *PostgresProfileRepository) CleanupInactiveUsers(timeoutMinutes int) error {
+	// CORRECTION : Utiliser une comparaison avec timestamp Go au lieu de SQL
+	// pour éviter les problèmes de fuseau horaire
+
+	nowUTC := time.Now().UTC()
+	cutoffTime := nowUTC.Add(-time.Duration(timeoutMinutes) * time.Minute)
+
+	// Debug : Voir quels utilisateurs vont être nettoyés
+	debugQuery := `
+		SELECT user_id, is_online, last_connection
+		FROM user_profiles
+		WHERE is_online = TRUE 
+	`
+
+	rows, err := r.db.Query(debugQuery)
+	if err == nil {
+		defer rows.Close()
+		var usersToCleanup []int
+
+		for rows.Next() {
+			var userID int
+			var isOnline bool
+			var lastConnection time.Time
+
+			err := rows.Scan(&userID, &isOnline, &lastConnection)
+			if err != nil {
+				continue
+			}
+
+			// Vérifier si cet utilisateur doit être nettoyé
+			if lastConnection.Before(cutoffTime) {
+				usersToCleanup = append(usersToCleanup, userID)
+			}
+		}
+
+		// Effectuer le nettoyage utilisateur par utilisateur
+		var totalCleaned int
+		for _, userID := range usersToCleanup {
+			_, err := r.db.Exec(`UPDATE user_profiles SET is_online = FALSE WHERE user_id = $1`, userID)
+			if err != nil {
+				fmt.Printf("❌ CLEANUP ERROR: Erreur nettoyage user %d: %v\n", userID, err)
+			} else {
+				totalCleaned++
+			}
+		}
+	}
+
+	return nil
+}
+
+// ProcessReport marque un signalement comme traité
+func (r *PostgresProfileRepository) ProcessReport(reportID int, adminComment, action string) error {
+	query := `
+		UPDATE user_reports 
+		SET is_processed = TRUE, 
+		    processed_at = CURRENT_TIMESTAMP,
+		    admin_comment = $2
+		WHERE id = $1
+	`
+
+	_, err := r.db.Exec(query, reportID, adminComment)
+	if err != nil {
+		return fmt.Errorf("erreur lors du traitement du signalement: %w", err)
+	}
+
+	// Ici on pourrait ajouter une logique pour appliquer l'action (suspension, etc.)
+	// selon la valeur du paramètre 'action'
+
+	return nil
+}
+
+// UpdateLastConnection met à jour l'horodatage de la dernière connexion d'un utilisateur
+func (r *PostgresProfileRepository) UpdateLastConnection(userID int) error {
+	// Vérifier si la colonne last_connection existe dans la table user_profiles
+	var columnExists bool
+	err := r.db.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 
+			FROM information_schema.columns 
+			WHERE table_name = 'user_profiles' AND column_name = 'last_connection'
+		)
+	`).Scan(&columnExists)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la vérification de la colonne last_connection: %w", err)
+	}
+
+	// Si la colonne n'existe pas, l'ajouter
+	if !columnExists {
+		_, err = r.db.Exec(`
+			ALTER TABLE user_profiles 
+			ADD COLUMN last_connection TIMESTAMP
+		`)
+		if err != nil {
+			return fmt.Errorf("erreur lors de l'ajout de la colonne last_connection: %w", err)
+		}
+	}
+
+	// Mettre à jour l'horodatage de la dernière connexion
+	query := `
+		UPDATE user_profiles
+		SET last_connection = CURRENT_TIMESTAMP
+		WHERE user_id = $1
+	`
+	_, err = r.db.Exec(query, userID)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la mise à jour de la dernière connexion: %w", err)
 	}
 
 	return nil

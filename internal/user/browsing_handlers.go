@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/cduffaut/matcha/internal/session"
@@ -55,19 +56,37 @@ func (h *BrowsingHandlers) GetSuggestionsHandler(w http.ResponseWriter, r *http.
 	suggestions, err := h.browsingService.GetSuggestions(userSession.UserID, limit, offset)
 	if err != nil {
 		fmt.Printf("Error in GetSuggestions: %v\n", err)
+
+		// CORRECTION : Gérer spécifiquement l'erreur de profil incomplet
+		if strings.Contains(err.Error(), "votre profil doit être complété") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK) // 200 OK au lieu de 500
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"suggestions":        []interface{}{}, // Tableau vide
+				"message":            "Complétez votre profil pour voir des suggestions",
+				"profile_incomplete": true,
+			})
+			return
+		}
+
+		// Autres erreurs
 		http.Error(w, "Erreur lors de la récupération des suggestions", http.StatusInternalServerError)
 		return
 	}
 
 	// Répondre avec les suggestions
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(suggestions); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"suggestions":        suggestions,
+		"profile_incomplete": false,
+	}); err != nil {
 		fmt.Printf("Error encoding JSON response: %v\n", err)
 		http.Error(w, "Erreur lors de l'encodage de la réponse", http.StatusInternalServerError)
 		return
 	}
 }
 
+// SearchProfilesHandler recherche des profils selon des critères
 // SearchProfilesHandler recherche des profils selon des critères
 func (h *BrowsingHandlers) SearchProfilesHandler(w http.ResponseWriter, r *http.Request) {
 	// Récupérer la session
@@ -126,7 +145,17 @@ func (h *BrowsingHandlers) SearchProfilesHandler(w http.ResponseWriter, r *http.
 	// Tags
 	tags := r.URL.Query().Get("tags")
 	if tags != "" {
-		options.Tags = []string{tags} // Pour simplifier, on prend un seul tag
+		// Séparer les tags par des virgules
+		tagsList := strings.Split(tags, ",")
+		// Nettoyer chaque tag
+		var cleanTags []string
+		for _, tag := range tagsList {
+			cleanTag := strings.TrimSpace(tag)
+			if cleanTag != "" {
+				cleanTags = append(cleanTags, cleanTag)
+			}
+		}
+		options.Tags = cleanTags
 	}
 
 	// Tri
@@ -163,13 +192,30 @@ func (h *BrowsingHandlers) SearchProfilesHandler(w http.ResponseWriter, r *http.
 	results, err := h.browsingService.SearchProfiles(userSession.UserID, options, limit, offset)
 	if err != nil {
 		fmt.Printf("Error in SearchProfiles: %v\n", err)
+
+		// CORRECTION : Gérer spécifiquement l'erreur de profil incomplet
+		if strings.Contains(err.Error(), "votre profil doit être complété") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK) // 200 OK au lieu de 500
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"results":            []interface{}{}, // Tableau vide
+				"message":            "Complétez votre profil pour effectuer des recherches",
+				"profile_incomplete": true,
+			})
+			return
+		}
+
+		// Autres erreurs
 		http.Error(w, "Erreur lors de la recherche de profils", http.StatusInternalServerError)
 		return
 	}
 
 	// Répondre avec les résultats
 	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(results); err != nil {
+	if err := json.NewEncoder(w).Encode(map[string]interface{}{
+		"results":            results,
+		"profile_incomplete": false,
+	}); err != nil {
 		fmt.Printf("Error encoding JSON response: %v\n", err)
 		http.Error(w, "Erreur lors de l'encodage de la réponse", http.StatusInternalServerError)
 		return
@@ -189,27 +235,34 @@ func (h *BrowsingHandlers) BrowsePageHandler(w http.ResponseWriter, r *http.Requ
 
 	// Afficher la page de navigation
 	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
-	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate") // Éviter le cache HTTP
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 
-	fmt.Fprintf(w, `
-        <!DOCTYPE html>
+	fmt.Fprintf(w, `<!DOCTYPE html>
         <html>
         <head>
             <title>Explorer - Matcha</title>
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <link rel="stylesheet" href="/static/css/browse.css?v=%s">
+			<link rel="stylesheet" href="/static/css/notifications_style_fix.css">
         </head>
         <body>
             <header>
                 <h1>Matcha</h1>
-                <nav>
-                    <a href="/profile">Mon profil</a>
-                    <a href="/browse" class="active">Explorer</a>
-                    <a href="/chat">Messages</a>
-                    <a href="/logout">Déconnexion</a>
-                </nav>
+				<nav>
+					<a href="/profile">Mon profil</a>
+					<a href="/browse">Explorer</a>
+					<a href="/notifications">
+						Notifications
+						<span id="notification-count"></span>
+					</a>
+					<a href="/chat">
+						Messages  
+						<span id="message-count"></span>
+					</a>
+					<a href="/logout">Déconnexion</a>
+				</nav>
             </header>
             
             <div class="container">
@@ -238,10 +291,17 @@ func (h *BrowsingHandlers) BrowsePageHandler(w http.ResponseWriter, r *http.Requ
                             <label for="max_distance">Distance maximum (km)</label>
                             <input type="number" id="max_distance" name="max_distance" min="0">
                         </div>
-                        <div class="form-group">
-                            <label for="tags">Tag</label>
-                            <input type="text" id="tags" name="tags" placeholder="Ex: #sport">
-                        </div>
+						<div class="form-group">
+							<label for="tags-search">Tags d'intérêt :</label>
+							<div class="tags-search-group">
+								<div class="tags-input-row">
+									<input type="text" id="tags-search" placeholder="Ex: sport, voyage, cuisine (# automatique)...">
+									<button type="button" id="add-tag-btn">Ajouter</button>
+								</div>
+								<div id="selected-tags"></div>
+								<div id="tag-suggestions"></div>
+							</div>
+						</div>
                         <div class="form-group">
                             <label for="sort_by">Trier par</label>
                             <select id="sort_by" name="sort_by">
@@ -264,7 +324,6 @@ func (h *BrowsingHandlers) BrowsePageHandler(w http.ResponseWriter, r *http.Requ
                 </div>
                 
                 <div id="profiles-container">
-                    <!-- Les profils seront chargés ici via JavaScript -->
                     <div class="loading">Chargement des profils...</div>
                 </div>
                 
@@ -273,8 +332,12 @@ func (h *BrowsingHandlers) BrowsePageHandler(w http.ResponseWriter, r *http.Requ
                 </div>
             </div>
             
+			<script src="/static/js/global-error-handler.js"></script>
             <script src="/static/js/browse.js?v=%s"></script>
+			<script src="/static/js/user_status.js"></script>
+			<script src="/static/js/navigation_active.js"></script>
+			<script src="/static/js/notifications_unified.js"></script>
+			
         </body>
-        </html>
-    `, cssVersion, cssVersion)
+        </html>`, cssVersion, cssVersion)
 }

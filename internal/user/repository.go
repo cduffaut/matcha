@@ -21,8 +21,8 @@ func NewPostgresRepository(db *sql.DB) Repository {
 // Create ajoute un nouvel utilisateur dans la base de données
 func (r *PostgresRepository) Create(user *models.User) error {
 	query := `
-        INSERT INTO users (username, email, first_name, last_name, password, verification_token)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO users (username, email, first_name, last_name, password, verification_token, is_verified)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
         RETURNING id, created_at, updated_at
     `
 
@@ -34,6 +34,7 @@ func (r *PostgresRepository) Create(user *models.User) error {
 		user.LastName,
 		user.Password,
 		user.VerificationToken,
+		user.IsVerified,
 	).Scan(&user.ID, &user.CreatedAt, &user.UpdatedAt)
 }
 
@@ -277,4 +278,33 @@ func (r *PostgresRepository) UpdatePassword(id int, password string) error {
 
 	_, err := r.db.Exec(query, password, id)
 	return err
+}
+
+// UpdateUserInfo met à jour les informations de base d'un utilisateur (nom, prénom, email)
+func (r *PostgresRepository) UpdateUserInfo(id int, firstName, lastName, email string) error {
+	query := `
+        UPDATE users
+        SET first_name = $1, last_name = $2, email = $3, updated_at = CURRENT_TIMESTAMP
+        WHERE id = $4
+    `
+
+	_, err := r.db.Exec(query, firstName, lastName, email, id)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la mise à jour des informations utilisateur: %w", err)
+	}
+
+	return nil
+}
+
+// CheckEmailExists vérifie si un email est déjà utilisé par un autre utilisateur
+func (r *PostgresRepository) CheckEmailExists(email string, excludeUserID int) (bool, error) {
+	query := `SELECT COUNT(*) FROM users WHERE email = $1 AND id != $2`
+
+	var count int
+	err := r.db.QueryRow(query, email, excludeUserID).Scan(&count)
+	if err != nil {
+		return false, fmt.Errorf("erreur lors de la vérification de l'email: %w", err)
+	}
+
+	return count > 0, nil
 }

@@ -16,6 +16,8 @@ func RunMigrations(db *sql.DB) error {
 		"internal/database/migrations/create_users_table.sql",
 		"internal/database/migrations/create_profile_tables.sql",
 		"internal/database/migrations/create_blocks_table.sql",
+		"internal/database/migrations/create_notifications_table.sql",
+		"internal/database/migrations/create_messages_table.sql",
 	}
 
 	for _, file := range migrationFiles {
@@ -30,8 +32,6 @@ func RunMigrations(db *sql.DB) error {
 		if err != nil {
 			return fmt.Errorf("erreur lors de l'exécution de la migration %s: %w", file, err)
 		}
-
-		fmt.Printf("Migration %s exécutée avec succès\n", file)
 	}
 
 	return nil

@@ -10,17 +10,18 @@ import (
 	"github.com/cduffaut/matcha/internal/email"
 	"github.com/cduffaut/matcha/internal/models"
 	"github.com/cduffaut/matcha/internal/user"
+	"github.com/cduffaut/matcha/internal/validation"
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Service représente le service d'authentification
+// serv d'authentification
 type Service struct {
 	userRepo     user.Repository
 	emailService *email.Service
 	baseURL      string
 }
 
-// NewService crée un nouveau service d'authentification
+// cree un nouveau service d'auth
 func NewService(userRepo user.Repository, emailService *email.Service, baseURL string) *Service {
 	return &Service{
 		userRepo:     userRepo,
@@ -29,7 +30,7 @@ func NewService(userRepo user.Repository, emailService *email.Service, baseURL s
 	}
 }
 
-// RegisterRequest contient les données pour l'inscription
+// data pour l'inscription
 type RegisterRequest struct {
 	Username  string `json:"username"`
 	Email     string `json:"email"`
@@ -38,26 +39,33 @@ type RegisterRequest struct {
 	Password  string `json:"password"`
 }
 
-// LoginRequest contient les données pour la connexion
+// data pour la connexion
 type LoginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
 }
 
-// ForgotPasswordRequest contient les données pour la récupération de mot de passe
+// data pour la recup de mdp
 type ForgotPasswordRequest struct {
 	Email string `json:"email"`
 }
 
-// ResetPasswordRequest contient les données pour la réinitialisation de mot de passe
+// data pour la reinitialisation de mdp
 type ResetPasswordRequest struct {
 	Token    string `json:"token"`
 	Password string `json:"password"`
 }
 
-// Register inscrit un nouvel utilisateur
+// data pour la m à j des infos users
+type UpdateUserInfoRequest struct {
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+	Email     string `json:"email"`
+}
+
+// inscrit un nouv user
 func (s *Service) Register(req RegisterRequest) (*models.User, error) {
-	// Vérifier si l'utilisateur existe déjà
+	// verif si le user existe deja
 	existingUser, err := s.userRepo.GetByUsername(req.Username)
 	if err == nil && existingUser != nil {
 		return nil, fmt.Errorf("ce nom d'utilisateur existe déjà")
@@ -68,19 +76,19 @@ func (s *Service) Register(req RegisterRequest) (*models.User, error) {
 		return nil, fmt.Errorf("cet email est déjà utilisé")
 	}
 
-	// Hash du mot de passe
+	// hash du mdp
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return nil, fmt.Errorf("erreur lors du hachage du mot de passe: %w", err)
 	}
 
-	// Générer un token de vérification
+	// gen un token de verif
 	verificationToken, err := generateRandomToken(32)
 	if err != nil {
 		return nil, fmt.Errorf("erreur lors de la génération du token: %w", err)
 	}
 
-	// Créer l'utilisateur
+	// cree user non verif
 	newUser := &models.User{
 		Username:          req.Username,
 		Email:             req.Email,
@@ -88,25 +96,27 @@ func (s *Service) Register(req RegisterRequest) (*models.User, error) {
 		LastName:          req.LastName,
 		Password:          string(hashedPassword),
 		VerificationToken: &verificationToken,
-		IsVerified:        false,
+		IsVerified:        false, // user non verif
 	}
 
-	// Sauvegarder l'utilisateur
+	// save user
 	if err := s.userRepo.Create(newUser); err != nil {
 		return nil, fmt.Errorf("erreur lors de la création de l'utilisateur: %w", err)
 	}
 
-	// TODO: Envoyer l'email de vérification
+	// send email de verif
 	verificationLink := fmt.Sprintf("%s/verify-email?token=%s", s.baseURL, verificationToken)
 	if err := s.emailService.SendVerificationEmail(newUser.Email, newUser.Username, verificationLink); err != nil {
 		log.Printf("Erreur lors de l'envoi de l'email de vérification: %v", err)
 	}
-	fmt.Printf("Lien de vérification: %s\n", verificationLink)
+
+	fmt.Printf("📧 Email de vérification envoyé à: %s\n", newUser.Email)
+	fmt.Printf("🔗 Lien de vérification: %s\n", verificationLink)
 
 	return newUser, nil
 }
 
-// VerifyEmail vérifie l'email d'un utilisateur avec un token
+// verif email user avec un token
 func (s *Service) VerifyEmail(token string) error {
 	user, err := s.userRepo.GetByVerificationToken(token)
 	if err != nil {
@@ -124,21 +134,19 @@ func (s *Service) VerifyEmail(token string) error {
 	return nil
 }
 
-// Login connecte un utilisateur
+// connecte un user
 func (s *Service) Login(req LoginRequest) (*models.User, error) {
+
 	user, err := s.userRepo.GetByUsername(req.Username)
 	if err != nil {
-		fmt.Println("err:", err)
 		return nil, fmt.Errorf("nom d'utilisateur ou mot de passe incorrect")
 	}
-	fmt.Printf("⚠️ Utilisateur trouvé: %+v\n", user)
-	fmt.Printf("⚠️ Comparaison de mot de passe: '%s' (haché) vs '%s' (saisi)\n", user.Password, req.Password)
 
 	if !user.IsVerified {
 		return nil, fmt.Errorf("veuillez vérifier votre adresse email avant de vous connecter")
 	}
 
-	// Vérifier le mot de passe
+	// verif le mdp
 	err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(req.Password))
 	if err != nil {
 		return nil, fmt.Errorf("nom d'utilisateur ou mot de passe incorrect")
@@ -147,54 +155,53 @@ func (s *Service) Login(req LoginRequest) (*models.User, error) {
 	return user, nil
 }
 
-// ForgotPassword envoie un email pour réinitialiser le mot de passe
+// envoie un email pour reinit le mdp
 func (s *Service) ForgotPassword(req ForgotPasswordRequest) error {
 	user, err := s.userRepo.GetByEmail(req.Email)
 	if err != nil {
-		// Ne pas révéler si l'email existe ou non pour des raisons de sécurité
+		// ne pas reveal si mail existe pour des raisons de secu
 		return nil
 	}
 
-	// Générer un token de réinitialisation
+	// gen un token de reinit
 	resetToken, err := generateRandomToken(32)
 	if err != nil {
 		return fmt.Errorf("erreur lors de la génération du token: %w", err)
 	}
 
-	// Définir une durée d'expiration (24 heures)
+	// def une duree d'exp (24h)
 	expiry := time.Now().Add(24 * time.Hour)
 
-	// Sauvegarder le token
+	// save le token
 	if err := s.userRepo.SaveResetToken(user.ID, resetToken, expiry); err != nil {
 		return fmt.Errorf("erreur lors de l'enregistrement du token: %w", err)
 	}
 
-	// TODO: Envoyer l'email de réinitialisation
+	// send mail de reinit
 	resetLink := fmt.Sprintf("%s/reset-password?token=%s", s.baseURL, resetToken)
 	err = s.emailService.SendPasswordResetEmail(user.Email, user.Username, resetLink)
 	if err != nil {
 		log.Printf("Erreur lors de l'envoi de l'email de réinitialisation: %v", err)
-		// On continue malgré l'erreur pour ne pas révéler si l'email existe
 	}
 	fmt.Printf("Lien de réinitialisation: %s\n", resetLink)
 
 	return nil
 }
 
-// ResetPassword réinitialise le mot de passe d'un utilisateur
+// reinit le mdp d'un user
 func (s *Service) ResetPassword(req ResetPasswordRequest) error {
 	user, err := s.userRepo.GetByResetToken(req.Token)
 	if err != nil {
 		return fmt.Errorf("token de réinitialisation invalide ou expiré: %w", err)
 	}
 
-	// Hash du nouveau mot de passe
+	// hash du nouveau mdp
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
 		return fmt.Errorf("erreur lors du hachage du mot de passe: %w", err)
 	}
 
-	// Mettre à jour le mot de passe
+	// m à j le mdp
 	if err := s.userRepo.UpdatePassword(user.ID, string(hashedPassword)); err != nil {
 		return fmt.Errorf("erreur lors de la mise à jour du mot de passe: %w", err)
 	}
@@ -202,11 +209,44 @@ func (s *Service) ResetPassword(req ResetPasswordRequest) error {
 	return nil
 }
 
-// generateRandomToken génère un token aléatoire de la taille spécifiée
+// gen un token aleatoire de la taille donnee
 func generateRandomToken(length int) (string, error) {
 	b := make([]byte, length)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	return base64.URLEncoding.EncodeToString(b), nil
+}
+
+// m à j les infos de base d'un user
+func (s *Service) UpdateUserInfo(userID int, req UpdateUserInfoRequest) error {
+	if err := validation.ValidateName(req.FirstName, "prénom"); err != nil {
+		return err
+	}
+
+	if err := validation.ValidateName(req.LastName, "nom"); err != nil {
+		return err
+	}
+
+	if err := validation.ValidateEmail(req.Email); err != nil {
+		return err
+	}
+
+	// verif si le mail n'est pas deja utilise par un autre user
+	emailExists, err := s.userRepo.CheckEmailExists(req.Email, userID)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la vérification de l'email: %w", err)
+	}
+
+	if emailExists {
+		return fmt.Errorf("cette adresse email est déjà utilisée")
+	}
+
+	// m à j les infos
+	err = s.userRepo.UpdateUserInfo(userID, req.FirstName, req.LastName, req.Email)
+	if err != nil {
+		return fmt.Errorf("erreur lors de la mise à jour des informations: %w", err)
+	}
+
+	return nil
 }

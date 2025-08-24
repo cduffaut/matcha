@@ -1,7 +1,10 @@
+// internal/email/service.go - ENVOI RÉEL D'EMAILS
+
 package email
 
 import (
 	"fmt"
+	"net/smtp"
 )
 
 // Service gère l'envoi d'emails
@@ -61,34 +64,41 @@ func (s *Service) SendPasswordResetEmail(to, username, resetLink string) error {
 	return s.sendEmail(to, subject, body)
 }
 
-// sendEmail envoie un email
-// func (s *Service) sendEmail(to, subject, body string) error {
-// 	addr := fmt.Sprintf("%s:%s", s.smtpHost, s.smtpPort)
-// 	auth := smtp.PlainAuth("", s.smtpUsername, s.smtpPassword, s.smtpHost)
-
-// 	headers := make(map[string]string)
-// 	headers["From"] = s.fromEmail
-// 	headers["To"] = to
-// 	headers["Subject"] = subject
-// 	headers["MIME-Version"] = "1.0"
-// 	headers["Content-Type"] = "text/html; charset=UTF-8"
-
-// 	message := ""
-// 	for k, v := range headers {
-// 		message += fmt.Sprintf("%s: %s\r\n", k, v)
-// 	}
-// 	message += "\r\n" + body
-
-//		return smtp.SendMail(addr, auth, s.fromEmail, []string{to}, []byte(message))
-//	}
+// sendEmail envoie un email - VERSION DÉVELOPPEMENT
 func (s *Service) sendEmail(to, subject, body string) error {
-	// Version de développement : afficher l'email dans la console au lieu de l'envoyer
+	// EN DÉVELOPPEMENT: Afficher dans la console ET essayer d'envoyer si configuré
 	fmt.Println("========== EMAIL ==========")
 	fmt.Println("À:", to)
 	fmt.Println("Sujet:", subject)
 	fmt.Println("Corps:", body)
 	fmt.Println("==========================")
 
-	// Simulation de succès
+	// Si les paramètres SMTP sont configurés, essayer d'envoyer
+	if s.smtpHost != "" && s.smtpPort != "" {
+		return s.sendRealEmail(to, subject, body)
+	}
+
+	// Sinon, juste afficher (mode développement)
 	return nil
+}
+
+// sendRealEmail envoie vraiment un email via SMTP
+func (s *Service) sendRealEmail(to, subject, body string) error {
+	addr := fmt.Sprintf("%s:%s", s.smtpHost, s.smtpPort)
+	auth := smtp.PlainAuth("", s.smtpUsername, s.smtpPassword, s.smtpHost)
+
+	headers := make(map[string]string)
+	headers["From"] = s.fromEmail
+	headers["To"] = to
+	headers["Subject"] = subject
+	headers["MIME-Version"] = "1.0"
+	headers["Content-Type"] = "text/html; charset=UTF-8"
+
+	message := ""
+	for k, v := range headers {
+		message += fmt.Sprintf("%s: %s\r\n", k, v)
+	}
+	message += "\r\n" + body
+
+	return smtp.SendMail(addr, auth, s.fromEmail, []string{to}, []byte(message))
 }

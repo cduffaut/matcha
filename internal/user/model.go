@@ -18,4 +18,8 @@ type Repository interface {
 	SaveResetToken(id int, token string, expiry time.Time) error
 	GetByResetToken(token string) (*models.User, error)
 	UpdatePassword(id int, password string) error
+
+	// ✅ NOUVELLES MÉTHODES pour modifier nom, prénom, email
+	UpdateUserInfo(id int, firstName, lastName, email string) error
+	CheckEmailExists(email string, excludeUserID int) (bool, error)
 }

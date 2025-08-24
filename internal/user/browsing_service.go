@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/cduffaut/matcha/internal/models"
@@ -30,6 +31,49 @@ type SuggestedProfileResult struct {
 	CompatibilityScore float64
 	Distance           float64
 	CommonTags         int
+	Age                int
+}
+
+// IsProfileComplete vérifie si un profil remplit toutes les conditions obligatoires
+func (s *BrowsingService) IsProfileComplete(profile *Profile) bool {
+	// 1. Genre obligatoire
+	if profile.Gender == "" {
+		return false
+	}
+
+	// 2. Préférence sexuelle obligatoire
+	if profile.SexualPreference == "" {
+		return false
+	}
+
+	// 3. Biographie obligatoire (non vide après trim)
+	if strings.TrimSpace(profile.Biography) == "" {
+		return false
+	}
+
+	// 4. Date de naissance obligatoire
+	if profile.BirthDate == nil {
+		return false
+	}
+
+	// 5. Au moins un tag/intérêt obligatoire
+	if len(profile.Tags) == 0 {
+		return false
+	}
+
+	// 6. Au moins une photo de profil obligatoire
+	hasProfilePhoto := false
+	for _, photo := range profile.Photos {
+		if photo.IsProfile {
+			hasProfilePhoto = true
+			break
+		}
+	}
+	if !hasProfilePhoto {
+		return false
+	}
+
+	return true
 }
 
 // GetSuggestions récupère des suggestions de profils selon des critères
@@ -38,6 +82,11 @@ func (s *BrowsingService) GetSuggestions(userID int, limit, offset int) ([]Sugge
 	currentProfile, err := s.profileRepo.GetByUserID(userID)
 	if err != nil {
 		return nil, fmt.Errorf("erreur lors de la récupération du profil: %w", err)
+	}
+
+	// AJOUT: Vérifier que le profil actuel est complet AVANT de chercher des suggestions
+	if !s.IsProfileComplete(currentProfile) {
+		return []SuggestedProfileResult{}, fmt.Errorf("votre profil doit être complété pour voir des suggestions")
 	}
 
 	currentUser, err := s.userRepo.GetByID(userID)
@@ -60,6 +109,11 @@ func (s *BrowsingService) GetSuggestions(userID int, limit, offset int) ([]Sugge
 			continue
 		}
 
+		// AJOUT: Vérifier que le profil candidat est complet
+		if !s.IsProfileComplete(profile) {
+			continue
+		}
+
 		// Récupérer les infos de l'utilisateur
 		user, err := s.userRepo.GetByID(profile.UserID)
 		if err != nil {
@@ -75,6 +129,20 @@ func (s *BrowsingService) GetSuggestions(userID int, limit, offset int) ([]Sugge
 		blocked, err := s.profileRepo.IsBlocked(userID, profile.UserID)
 		if err != nil || blocked {
 			continue
+		}
+
+		alreadyLiked, err := s.profileRepo.CheckIfLiked(userID, profile.UserID)
+		if err != nil || alreadyLiked {
+			continue
+		}
+
+		// CORRECTION: Exclure les utilisateurs déjà matchés
+		matched, err := s.profileRepo.CheckIfMatched(userID, profile.UserID)
+		if err != nil {
+			continue // En cas d'erreur, ignorer ce profil
+		}
+		if matched {
+			continue // Ignorer les profils déjà matchés
 		}
 
 		// Calculer la distance
@@ -97,6 +165,11 @@ func (s *BrowsingService) GetSuggestions(userID int, limit, offset int) ([]Sugge
 
 		compatibilityScore := distanceScore*0.5 + tagsScore*0.3 + fameScore*0.2
 
+		age := 0
+		if profile.BirthDate != nil {
+			age = calculateAge(*profile.BirthDate)
+		}
+
 		// Ajouter à la liste
 		filteredProfiles = append(filteredProfiles, SuggestedProfileResult{
 			Profile:            profile,
@@ -104,6 +177,7 @@ func (s *BrowsingService) GetSuggestions(userID int, limit, offset int) ([]Sugge
 			CompatibilityScore: compatibilityScore,
 			Distance:           distance,
 			CommonTags:         commonTags,
+			Age:                age,
 		})
 	}
 
@@ -111,6 +185,57 @@ func (s *BrowsingService) GetSuggestions(userID int, limit, offset int) ([]Sugge
 	sort.Slice(filteredProfiles, func(i, j int) bool {
 		return filteredProfiles[i].CompatibilityScore > filteredProfiles[j].CompatibilityScore
 	})
+
+	// NOUVEAU : Prioriser la zone géographique selon le cahier des charges
+	// Créer 5 groupes par distance pour une démonstration claire de la priorité géographique
+	var zone1Profiles []SuggestedProfileResult // < 180km (très proche)
+	var zone2Profiles []SuggestedProfileResult // 180-250km (proche)
+	var zone3Profiles []SuggestedProfileResult // 250-350km (moyen)
+	var zone4Profiles []SuggestedProfileResult // 350-500km (loin)
+	var zone5Profiles []SuggestedProfileResult // > 500km (très loin)
+
+	for _, profile := range filteredProfiles {
+		if profile.Distance < 180.0 {
+			zone1Profiles = append(zone1Profiles, profile)
+		} else if profile.Distance < 250.0 {
+			zone2Profiles = append(zone2Profiles, profile)
+		} else if profile.Distance < 350.0 {
+			zone3Profiles = append(zone3Profiles, profile)
+		} else if profile.Distance < 500.0 {
+			zone4Profiles = append(zone4Profiles, profile)
+		} else {
+			zone5Profiles = append(zone5Profiles, profile)
+		}
+	}
+
+	// DEBUG: Afficher la répartition par zones (optionnel - à supprimer en production)
+	fmt.Printf("DEBUG - Geographic zones: Zone1(<180km)=%d, Zone2(180-250km)=%d, Zone3(250-350km)=%d, Zone4(350-500km)=%d, Zone5(>500km)=%d\n",
+		len(zone1Profiles), len(zone2Profiles), len(zone3Profiles), len(zone4Profiles), len(zone5Profiles))
+
+	// Trier chaque zone par score de compatibilité
+	sort.Slice(zone1Profiles, func(i, j int) bool {
+		return zone1Profiles[i].CompatibilityScore > zone1Profiles[j].CompatibilityScore
+	})
+	sort.Slice(zone2Profiles, func(i, j int) bool {
+		return zone2Profiles[i].CompatibilityScore > zone2Profiles[j].CompatibilityScore
+	})
+	sort.Slice(zone3Profiles, func(i, j int) bool {
+		return zone3Profiles[i].CompatibilityScore > zone3Profiles[j].CompatibilityScore
+	})
+	sort.Slice(zone4Profiles, func(i, j int) bool {
+		return zone4Profiles[i].CompatibilityScore > zone4Profiles[j].CompatibilityScore
+	})
+	sort.Slice(zone5Profiles, func(i, j int) bool {
+		return zone5Profiles[i].CompatibilityScore > zone5Profiles[j].CompatibilityScore
+	})
+
+	// Reconstruire la liste avec priorité géographique stricte
+	filteredProfiles = []SuggestedProfileResult{}
+	filteredProfiles = append(filteredProfiles, zone1Profiles...) // Très proche en premier
+	filteredProfiles = append(filteredProfiles, zone2Profiles...) // Puis proche
+	filteredProfiles = append(filteredProfiles, zone3Profiles...) // Puis moyen
+	filteredProfiles = append(filteredProfiles, zone4Profiles...) // Puis loin
+	filteredProfiles = append(filteredProfiles, zone5Profiles...) // Très loin en dernier
 
 	// Pagination
 	start := offset
@@ -230,6 +355,16 @@ type FilterOptions struct {
 
 // SearchProfiles recherche des profils selon des critères
 func (s *BrowsingService) SearchProfiles(userID int, options FilterOptions, limit, offset int) ([]SuggestedProfileResult, error) {
+	// AJOUT: Vérifier que le profil actuel est complet AVANT de permettre la recherche
+	currentProfile, err := s.profileRepo.GetByUserID(userID)
+	if err != nil {
+		return nil, fmt.Errorf("erreur lors de la récupération du profil: %w", err)
+	}
+
+	if !s.IsProfileComplete(currentProfile) {
+		return []SuggestedProfileResult{}, fmt.Errorf("votre profil doit être complété pour effectuer des recherches")
+	}
+
 	// Similaire à GetSuggestions mais avec des filtres supplémentaires
 	suggestions, err := s.GetSuggestions(userID, 1000, 0) // Récupère un grand nombre
 	if err != nil {
@@ -250,22 +385,11 @@ func (s *BrowsingService) SearchProfiles(userID int, options FilterOptions, limi
 			continue
 		}
 
-		if options.MinAge > 0 || options.MaxAge > 0 {
-			var age int
-			if suggestion.Profile.BirthDate != nil {
-				age = calculateAge(*suggestion.Profile.BirthDate)
-
-				if options.MinAge > 0 && age < options.MinAge {
-					continue
-				}
-				if options.MaxAge > 0 && age > options.MaxAge {
-					continue
-				}
-			} else if options.MinAge > 0 {
-				// Si l'âge minimum est défini et que l'utilisateur n'a pas de date de naissance,
-				// on peut choisir d'exclure ce profil ou non selon la politique souhaitée
-				continue
-			}
+		if options.MinAge > 0 && suggestion.Age < options.MinAge {
+			continue
+		}
+		if options.MaxAge > 0 && suggestion.Age > options.MaxAge {
+			continue
 		}
 
 		// Filtrer par tags
@@ -273,12 +397,30 @@ func (s *BrowsingService) SearchProfiles(userID int, options FilterOptions, limi
 			hasAllTags := true
 			tagMap := make(map[string]bool)
 
+			// Construire une map avec TOUS les formats possibles des tags du profil
 			for _, tag := range suggestion.Profile.Tags {
+				// Ajouter le tag tel qu'il est stocké
 				tagMap[tag.Name] = true
+
+				// Ajouter aussi la version sans # si le tag commence par #
+				if strings.HasPrefix(tag.Name, "#") {
+					tagMap[tag.Name[1:]] = true
+				} else {
+					// Ajouter aussi la version avec # si le tag ne commence pas par #
+					tagMap["#"+tag.Name] = true
+				}
 			}
 
+			// Vérifier si tous les tags recherchés sont présents
 			for _, tag := range options.Tags {
-				if !tagMap[tag] {
+				// Normaliser le tag recherché : ajouter # si absent
+				normalizedTag := tag
+				if !strings.HasPrefix(tag, "#") {
+					normalizedTag = "#" + tag
+				}
+
+				// Vérifier si le tag (avec ou sans #) existe dans la map
+				if !tagMap[tag] && !tagMap[normalizedTag] {
 					hasAllTags = false
 					break
 				}
@@ -296,21 +438,10 @@ func (s *BrowsingService) SearchProfiles(userID int, options FilterOptions, limi
 	switch options.SortBy {
 	case "age":
 		sort.Slice(filtered, func(i, j int) bool {
-			// Obtenir les âges (0 si pas de date de naissance)
-			ageI := 0
-			if filtered[i].Profile.BirthDate != nil {
-				ageI = calculateAge(*filtered[i].Profile.BirthDate)
-			}
-
-			ageJ := 0
-			if filtered[j].Profile.BirthDate != nil {
-				ageJ = calculateAge(*filtered[j].Profile.BirthDate)
-			}
-
 			if options.SortOrder == "asc" {
-				return ageI < ageJ
+				return filtered[i].Age < filtered[j].Age
 			}
-			return ageI > ageJ
+			return filtered[i].Age > filtered[j].Age
 		})
 	case "distance":
 		sort.Slice(filtered, func(i, j int) bool {

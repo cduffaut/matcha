@@ -1,122 +1,97 @@
-# Matcha - Application de Rencontres
+# Justifications Respect du Sujet Matcha
 
-Matcha est une application web de rencontres développée en Go avec le framework Goji.
+### 1. "Does not include an ORM, validators, or a User Account Manager."
 
-## Prérequis
+Pas d'ORM > Requetes SQL manuelles dans database/database.go:
+	db.Exec(string(content))
+	RunMigrations(db *sql.DB) lit et execute les fichiers .sql
 
-- Go 1.19 ou supérieur
-- PostgreSQL 12 ou supérieur
-- Git
+Validation maison > internal/validation/validation.go:
+	func ValidateEmail(email string) error
+	func ValidateUsername(username string) error
+	func ValidatePassword(password string) error
 
-## Installation
+Gestion utilisateurs maison > internal/session/
+	func (m *Manager) CreateSession(w http.ResponseWriter, user *models.User)
+	func (m *Manager) GetSession(r *http.Request)
+	func (m *Manager) DestroySession(w http.ResponseWriter, r *http.Request)
+	type Session struct {
+		UserID    int
+		Username  string
+		ExpiresAt time.Time
+	}
 
-1. Cloner le repository
-```bash
-git clone https://github.com/cduffaut/matcha.git
-cd matcha
-```
+### 2. "You will also need to create your queries manually, like mature developers do."
 
-2. Installer les dépendances
-```bash
-go mod download
-```
+Requetes manuelles: internal/user/repository.go
+	func (r *PostgresRepository) Create(user *models.User) error
+	func (r *PostgresRepository) GetByID(id int) (*models.User, error)
+	func (r *PostgresRepository) GetByUsername(username string) (*models.User, error)
 
-3. Configurer la base de données
-```bash
-# Créer la base de données
-createdb matcha
+### 3. "built-in web server."
+	internal/config/config.go
+	cmd/server/main.go
 
-# Copier le fichier .env exemple
-cp .env.example .env
+	fileServer := http.FileServer(http.Dir("web/static"))
 
-# Éditer le fichier .env avec vos paramètres
-```
+### 4. "All your forms should have proper validation"
 
-4. Créer les dossiers nécessaires
-```bash
-mkdir -p web/static/uploads
-mkdir -p web/static/css
-mkdir -p web/static/js
-mkdir -p web/static/images
-```
+	internal/validation/validation.go
 
-5. Démarrer l'application
-```bash
-go run cmd/server/main.go
-```
+	func ValidateEmail(email string) error
+	func ValidateUsername(username string) error  
+	func ValidatePassword(password string) error
+	func ValidateName(name, fieldName string) error
 
-L'application sera accessible sur http://localhost:8080
+### 5. "◦ Storing plain text passwords in your database. 
+### 	◦ Allowing injection of HTML or user Javascript code in unprotected variables. ◦ Allowing upload of unwanted content.
+### 	◦ Allowing alteration of SQL requests."
 
-## Structure du projet
+1.  Mots de passe haches:
+	internal/auth/service.go
+	bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	> Utilisation de bcrypt avec salt automatique
 
-```
-matcha/
-├── cmd/
-│   └── server/
-│       └── main.go            # Point d'entrée de l'application
-├── internal/
-│   ├── auth/                  # Authentification
-│   ├── config/                # Configuration
-│   ├── database/              # Base de données et migrations
-│   ├── email/                 # Service d'email
-│   ├── middleware/            # Middlewares
-│   ├── models/                # Modèles de données
-│   ├── session/               # Gestion des sessions
-│   └── user/                  # Profils et navigation
-├── web/
-│   └── static/
-│       ├── css/               # Fichiers CSS
-│       ├── js/                # Fichiers JavaScript
-│       ├── images/            # Images statiques
-│       └── uploads/           # Photos uploadées
-├── .env.example               # Variables d'environnement exemple
-├── go.mod                     # Dépendances Go
-└── README.md                  # Ce fichier
-```
+	Demonstration:
+	psql -U csil -d matcha
+	SELECT id, username, email, first_name, last_name, 
+       password, is_verified, created_at 
+	FROM users;
 
-## Fonctionnalités implémentées
 
-- [x] Inscription et connexion
-- [x] Vérification par email
-- [x] Réinitialisation de mot de passe
-- [x] Profil utilisateur
-- [x] Upload de photos
-- [x] Tags/intérêts
-- [x] Géolocalisation
-- [x] Navigation et suggestions
-- [x] Recherche avancée
-- [x] Système de likes
-- [x] Historique des visites
-- [x] Fame rating
-- [ ] Chat en temps réel
-- [ ] Notifications
-- [ ] Blocage d'utilisateurs
-- [ ] Signalement de faux comptes
+2. Protection ocontre injection HTML/Javascript:
+	internal/security/sql_security.go
+	- containsHTML(): détecte balises HTML
 
-## Test de l'application
+	Demonstration: dans un champs du site, inserer: <script>alert('XSS')</script> ou <iframe src=javascript:alert('XSS')> par ex.
 
-1. Créer un compte utilisateur
-2. Vérifier l'email (le lien s'affiche dans la console en mode développement)
-3. Se connecter
-4. Compléter le profil
-5. Upload une photo de profil
-6. Naviguer et liker d'autres profils
+	javascript:alert('XSS')
 
-## Développement
+3. Upload securisé:
+	internal/security/file_security.go
+	ValidateImageFile(): validation complete
+	scanForMaliciousContent(): scan de contenu malveillant
+	validateFileSize(): limite de taille
+	validateFileType(): types fichiers autorises
 
-Pour ajouter de nouvelles fonctionnalités :
+	Demonstration: tenter d'uploader un fichier .php 
 
-1. Créer les migrations SQL nécessaires dans `internal/database/migrations/`
-2. Ajouter les modèles dans le package approprié
-3. Implémenter les repositories et services
-4. Créer les handlers HTTP
-5. Ajouter les routes dans `main.go`
-6. Créer les pages HTML et fichiers JS/CSS nécessaires
+4. Protection contre injections SQL:
+	internal/security/sql_security.go
+	containsSQLInjection(): detection patterns SQL
 
-## Sécurité
+	admin' OR 1=1--
 
-- Les mots de passe sont hashés avec bcrypt
-- Protection contre les injections SQL
-- Validation des formulaires
-- Protection CSRF via sessions
-- Validation des uploads de fichiers
+5. Locate user without their knowledge:
+Si aucune localisation n'est associé au compte, le programme se charge d'appeler différentes API pour obtenir une geolocalisation sans en avertir l'utilisateur:
+profile.js > getSilentLocation > getIPLocation (recupère la localisation grace à l'IP)
+
+6. Calcul du pourcentage de compatibilité
+Fichier : internal/user/browsing_service.go
+Fonction : GetSuggestions
+Calcul : 50% distance + 30% tags communs + 20% fame rating
+
+6. != Ordre des profils
+Fichier : internal/user/browsing_service.go
+Fonction : GetSuggestions
+Logique : Tri par zones géographiques (180km, 250km, 350km, 500km), puis par score de compatibilité dans chaque zone.

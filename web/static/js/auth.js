@@ -1,121 +1,225 @@
-// Gérer les formulaires d'authentification
-document.addEventListener('DOMContentLoaded', function() {
-    const registerForm = document.getElementById('register-form');
-    const loginForm = document.getElementById('login-form');
+// ============================================================================
+// AUTH.JS - VERSION MISE À JOUR POUR MATCHA
+// Utilise le gestionnaire global d'erreurs pour zéro erreur console
+// ============================================================================
 
+document.addEventListener('DOMContentLoaded', function() {
+    // Gestion du formulaire d'inscription
+    const registerForm = document.getElementById('register-form');
     if (registerForm) {
         registerForm.addEventListener('submit', handleRegister);
     }
 
+    // Gestion du formulaire de connexion
+    const loginForm = document.getElementById('login-form');
     if (loginForm) {
         loginForm.addEventListener('submit', handleLogin);
     }
-
-    // Vérifier les paramètres d'URL pour afficher des messages
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('verified') === 'true') {
-        showSuccess('Email vérifié avec succès ! Vous pouvez maintenant vous connecter.');
+    
+    // Gestion du formulaire de mot de passe oublié
+    const forgotPasswordForm = document.getElementById('forgot-password-form');
+    if (forgotPasswordForm) {
+        forgotPasswordForm.addEventListener('submit', handleForgotPassword);
     }
 });
 
-async function handleRegister(e) {
-    e.preventDefault();
-    
-    const formData = {
-        username: document.getElementById('username').value,
-        email: document.getElementById('email').value,
-        first_name: document.getElementById('first_name').value,
-        last_name: document.getElementById('last_name').value,
-        password: document.getElementById('password').value
-    };
-
-    try {
-        const response = await fetch('/api/register', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(formData),
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            showSuccess('Inscription réussie ! Veuillez vérifier votre email.');
-            // Réinitialiser le formulaire
-            e.target.reset();
-        } else {
-            showError(data.error || 'Erreur lors de l\'inscription');
-        }
-    } catch (error) {
-        console.error('Erreur:', error);
-        showError('Erreur lors de l\'inscription');
-    }
-}
-
+// ============================================================================
+// FONCTION DE CONNEXION - ZÉRO ERREUR CONSOLE
+// ============================================================================
 async function handleLogin(e) {
     e.preventDefault();
     
-    const formData = {
-        username: document.getElementById('username').value,
-        password: document.getElementById('password').value
-    };
-
+    const username = document.getElementById('username').value.trim();
+    const password = document.getElementById('password').value;
+    
+    // Validation côté client
+    if (!username) {
+        showError('Veuillez saisir votre nom d\'utilisateur');
+        return;
+    }
+    
+    if (!password) {
+        showError('Veuillez saisir votre mot de passe');
+        return;
+    }
+    
+    // Désactiver le bouton pendant la requête
+    const submitButton = e.target.querySelector('button[type="submit"]');
+    const originalText = submitButton ? submitButton.textContent : '';
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = 'Connexion...';
+    }
+    
     try {
-        const response = await fetch('/api/login', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
+        // Utiliser la fonction globale handleFormSubmission
+        const result = await window.handleFormSubmission('/api/login', {
+            username: username,
+            password: password
+        }, {
+            redirectOnSuccess: '/profile',
+            onSuccess: (data) => {
+                showSuccess('Connexion réussie !');
             },
-            body: JSON.stringify(formData),
+            onError: (error) => {
+                // L'erreur est déjà affichée par handleFormSubmission
+                console.log('Erreur de connexion gérée:', error);
+            }
         });
-
-        const data = await response.json();
-
-        if (response.ok) {
-            // Rediriger vers la page de profil
-            window.location.href = '/profile';
-        } else {
-            showError(data.message || 'Nom d\'utilisateur ou mot de passe incorrect');
+        
+    } finally {
+        // Réactiver le bouton
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = originalText;
         }
-    } catch (error) {
-        console.error('Erreur:', error);
-        showError('Erreur lors de la connexion');
     }
 }
 
-function showError(message) {
-    // Créer ou obtenir l'élément d'erreur
-    let errorDiv = document.querySelector('.error');
-    if (!errorDiv) {
-        errorDiv = document.createElement('div');
-        errorDiv.className = 'error';
-        document.querySelector('.container').insertBefore(errorDiv, document.querySelector('form'));
+// ============================================================================
+// FONCTION D'INSCRIPTION - ZÉRO ERREUR CONSOLE
+// ============================================================================
+async function handleRegister(e) {
+    e.preventDefault();
+    
+    const username = document.getElementById('username').value.trim();
+    const email = document.getElementById('email').value.trim();
+    const firstName = document.getElementById('first_name').value.trim();
+    const lastName = document.getElementById('last_name').value.trim();
+    const password = document.getElementById('password').value;
+    const confirmPassword = document.getElementById('confirm_password')?.value;
+    
+    // Validation côté client
+    if (!username || !email || !firstName || !lastName || !password) {
+        showError('Veuillez remplir tous les champs obligatoires');
+        return;
     }
     
-    errorDiv.textContent = message;
-    errorDiv.style.display = 'block';
-
-    // Masquer après 5 secondes
-    setTimeout(() => {
-        errorDiv.style.display = 'none';
-    }, 5000);
-}
-
-function showSuccess(message) {
-    // Créer ou obtenir l'élément de succès
-    let successDiv = document.querySelector('.success');
-    if (!successDiv) {
-        successDiv = document.createElement('div');
-        successDiv.className = 'success';
-        document.querySelector('.container').insertBefore(successDiv, document.querySelector('form'));
+    if (confirmPassword && password !== confirmPassword) {
+        showError('Les mots de passe ne correspondent pas');
+        return;
     }
     
-    successDiv.textContent = message;
-    successDiv.style.display = 'block';
-
-    // Masquer après 5 secondes
-    setTimeout(() => {
-        successDiv.style.display = 'none';
-    }, 5000);
+    if (!isValidEmail(email)) {
+        showError('Veuillez saisir un email valide');
+        return;
+    }
+    
+    if (password.length < 8) {
+        showError('Le mot de passe doit contenir au moins 8 caractères');
+        return;
+    }
+    
+    // Désactiver le bouton
+    const submitButton = e.target.querySelector('button[type="submit"]');
+    const originalText = submitButton ? submitButton.textContent : '';
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = 'Inscription...';
+    }
+    
+    try {
+        const result = await window.handleFormSubmission('/api/register', {
+            username: username,
+            email: email,
+            first_name: firstName,
+            last_name: lastName,
+            password: password
+        }, {
+            onSuccess: (data) => {
+                showSuccess('Inscription réussie ! Vérifiez votre email pour activer votre compte.');
+                // Optionnel : rediriger vers la page de login après quelques secondes
+                setTimeout(() => {
+                    window.location.href = '/login?registered=true';
+                }, 2000);
+            },
+            onError: (error) => {
+                console.log('Erreur d\'inscription gérée:', error);
+            }
+        });
+        
+    } finally {
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = originalText;
+        }
+    }
 }
+
+// ============================================================================
+// FONCTION MOT DE PASSE OUBLIÉ
+// ============================================================================
+async function handleForgotPassword(e) {
+    e.preventDefault();
+    
+    const email = document.getElementById('email').value.trim();
+    
+    if (!email) {
+        showError('Veuillez saisir votre adresse email');
+        return;
+    }
+    
+    if (!isValidEmail(email)) {
+        showError('Veuillez saisir un email valide');
+        return;
+    }
+    
+    const submitButton = e.target.querySelector('button[type="submit"]');
+    const originalText = submitButton ? submitButton.textContent : '';
+    if (submitButton) {
+        submitButton.disabled = true;
+        submitButton.textContent = 'Envoi...';
+    }
+    
+    try {
+        const result = await window.handleFormSubmission('/api/forgot-password', {
+            email: email
+        }, {
+            onSuccess: (data) => {
+                showSuccess('Instructions de réinitialisation envoyées par email');
+                // Optionnel : masquer le formulaire ou rediriger
+                setTimeout(() => {
+                    window.location.href = '/login?reset-sent=true';
+                }, 2000);
+            },
+            onError: (error) => {
+                console.log('Erreur mot de passe oublié gérée:', error);
+            }
+        });
+        
+    } finally {
+        if (submitButton) {
+            submitButton.disabled = false;
+            submitButton.textContent = originalText;
+        }
+    }
+}
+
+// ============================================================================
+// FONCTIONS UTILITAIRES
+// ============================================================================
+
+function isValidEmail(email) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return emailRegex.test(email);
+}
+
+// Fonction pour gérer les messages d'URL (ex: ?registered=true)
+function handleURLMessages() {
+    const urlParams = new URLSearchParams(window.location.search);
+    
+    if (urlParams.get('registered') === 'true') {
+        showSuccess('Inscription réussie ! Connectez-vous avec vos identifiants.');
+    }
+    
+    if (urlParams.get('verified') === 'true') {
+        showSuccess('Email vérifié avec succès ! Vous pouvez maintenant vous connecter.');
+    }
+    
+    if (urlParams.get('reset-sent') === 'true') {
+        showSuccess('Email de réinitialisation envoyé !');
+    }
+}
+
+// Appeler au chargement de la page
+document.addEventListener('DOMContentLoaded', handleURLMessages);
