@@ -1,0 +1,3 @@
+.env
+internal/database/postgresql
+web/static/uploads/*

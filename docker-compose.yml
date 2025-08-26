@@ -10,3 +10,9 @@ services:
       POSTGRES_PORT: ${DB_PORT}
     ports:
       - "${DB_PORT}:5432"
+    volumes:
+      - ./internal/database/postgresql:/var/lib/postgresql/data
+
+volumes:
+  matcha-db-data:
+    driver: local

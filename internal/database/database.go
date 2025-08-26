@@ -15,9 +15,12 @@ func RunMigrations(db *sql.DB) error {
 	migrationFiles := []string{
 		"internal/database/migrations/create_users_table.sql",
 		"internal/database/migrations/create_profile_tables.sql",
+		"internal/database/migrations/add_birth_date_to_profiles.sql",
+		"internal/database/migrations/add_online_status_to_profiles.sql", 
 		"internal/database/migrations/create_blocks_table.sql",
 		"internal/database/migrations/create_notifications_table.sql",
 		"internal/database/migrations/create_messages_table.sql",
+		"internal/database/migrations/create_reports_table.sql",
 	}
 
 	for _, file := range migrationFiles {
