@@ -8,10 +8,33 @@ services:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
       POSTGRES_HOST: ${DB_HOST}
       POSTGRES_PORT: ${DB_PORT}
-    ports:
-      - "${DB_PORT}:5432"
+    expose:
+      - ${DB_PORT}
     volumes:
       - ./internal/database/postgresql:/var/lib/postgresql/data
+    networks:
+      - matcha-net
+
+  app:
+    build: .
+    container_name: matcha-app
+    environment:
+      DB_HOST: matcha-db
+      DB_PORT: ${DB_PORT}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+      PORT: ${PORT}
+    depends_on:
+      - matcha-db
+    ports:
+      - ${PORT}:${PORT}
+    networks:
+      - matcha-net
+
+networks:
+  matcha-net:
+    driver: bridge
 
 volumes:
   matcha-db-data:

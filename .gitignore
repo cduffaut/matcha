@@ -1,3 +1,4 @@
 .env
-internal/database/postgresql
+internal/database/postgresql/*
+!internal/database/postgresql
 web/static/uploads/*

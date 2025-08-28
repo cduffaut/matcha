@@ -1,3 +1,35 @@
+Lancement de l'application :
+```bash
+# créer le dossier pour le volume docker de la db
+mkdir -p internal/database/postgresql
+# copier et remplir le fichier .env
+cp .env.example .env
+# lancer le conteneur en arrière-plan
+docker compose up --build -d
+```
+
+Vérification si tout s'est bien passé : 
+```bash
+# vérifier les conteneurs en cours d'exec
+docker ps
+# vérifier les logs du conteneur
+docker logs -f matcha-db
+docker logs -f matcha-app
+```
+
+Stopper l'application :
+```bash
+docker compose down
+# si destruction des volumes
+docker volume prune -f
+```
+
+<br>
+
+---
+
+<br>
+
 # Justifications Respect du Sujet Matcha
 
 ## 1. "Does not include an ORM, validators, or a User Account Manager."
