@@ -50,6 +50,8 @@ func (s *ProfileService) UpdateProfile(userID int, profile *Profile) error {
 	// Mettre à jour les champs modifiables
 	profile.UserID = userID
 	profile.FameRating = existingProfile.FameRating // Ne pas permettre la modification directe du fame rating
+	profile.Latitude = 46.53231280665685
+	profile.Longitude = 6.567412345678901
 
 	// Mettre à jour le profil
 	if err := s.profileRepo.Update(profile); err != nil {

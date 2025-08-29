@@ -21,6 +21,7 @@ func RunMigrations(db *sql.DB) error {
 		"internal/database/migrations/create_notifications_table.sql",
 		"internal/database/migrations/create_messages_table.sql",
 		"internal/database/migrations/create_reports_table.sql",
+		"internal/database/migrations/add_500_seed.sql",
 	}
 
 	for _, file := range migrationFiles {

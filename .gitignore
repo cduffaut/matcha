@@ -2,3 +2,4 @@
 internal/database/postgresql/*
 !internal/database/postgresql
 web/static/uploads/*
+!web/static/uploads/mock_*
