@@ -8,119 +8,66 @@ import (
 	"strings"
 )
 
-// SQLSecurity fournit des fonctions pour sécuriser les requêtes SQL
-type SQLSecurity struct {
-	db *sql.DB
-}
+/* minimal, focused security helpers */
 
-// containsSQLInjection détecte les patterns d'injection SQL
-func containsSQLInjection(input string) bool {
-	lowerInput := strings.ToLower(strings.TrimSpace(input))
+type SQLSecurity struct{ db *sql.DB }
 
-	// NOUVELLE LOGIQUE: Patterns vraiment dangereux avec contexte
-	realDangerousPatterns := []string{
-		"' or 1=1",           // Classic SQL injection
-		"' or '1'='1'",       // String-based injection
-		"'; drop table",      // Command injection
-		"'; delete from",     // DELETE injection
-		"'; insert into",     // INSERT injection
-		"'; update ",         // UPDATE injection
-		"union select",       // UNION attack
-		"union all select",   // UNION ALL attack
-		"admin'--",           // Comment-based bypass
-		"admin'/*",           // Comment-based bypass
-		"waitfor delay",      // Time-based attack
-		"pg_sleep(",          // PostgreSQL sleep
-		"sleep(",             // MySQL sleep
-		"benchmark(",         // MySQL benchmark
-		"load_file(",         // File reading
-		"into outfile",       // File writing
-		"information_schema", // Schema attack
-		"@@version",          // System variables
-		"/**/",               // Comment evasion
-		"0x3c736372697074",   // Hex encoded script
+var (
+	htmlTagRe   = regexp.MustCompile(`(?is)<[^>]*>`)
+	userRe      = regexp.MustCompile(`^[a-zA-Z0-9_]+$`)
+	emailRe     = regexp.MustCompile(`^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$`)
+	tagRe       = regexp.MustCompile(`^#[a-zA-Z0-9]+$`)
+	nameRe      = regexp.MustCompile(`^[a-zA-ZÀ-ÿ\s'\-]+$`)
+	sqlDanger   = []string{
+		"' or 1=1", "' or '1'='1'", "'; drop ", "'; delete ", "'; insert ", "'; update ",
+		"union select", "union all select", "admin'--", "admin'/*", "waitfor delay",
+		"pg_sleep(", "sleep(", "benchmark(", "load_file(", "into outfile",
+		"information_schema", "@@version", "/**/", "0x3c736372697074",
 	}
+	sqlCtx = []string{
+		"' and ", "' or ", "' union ", "' having ", "' group by ", "' order by ",
+		"'; ", "'=", "'<", "'>", "' like ", "'||",
+	}
+	sqlCmd = []string{"; drop ", "; delete ", "; insert ", "; update ", "; create ", "; alter "}
+)
 
-	// Vérifier les patterns vraiment dangereux
-	for _, pattern := range realDangerousPatterns {
-		if strings.Contains(lowerInput, pattern) {
+func containsSQLInjection(input string) bool {
+	s := strings.ToLower(strings.TrimSpace(input))
+	if s == "" {
+		return false
+	}
+	for _, p := range sqlDanger {
+		if strings.Contains(s, p) {
 			return true
 		}
 	}
-
-	// Vérifier les apostrophes SEULEMENT si elles sont dans un contexte SQL dangereux
-	if strings.Contains(lowerInput, "'") {
-		sqlContextPatterns := []string{
-			"' and ",
-			"' or ",
-			"' union ",
-			"' having ",
-			"' group by ",
-			"' order by ",
-			"'; ",
-			"'=",
-			"'<",
-			"'>",
-			"' like ",
-			"'||", // Concatenation
-		}
-
-		for _, pattern := range sqlContextPatterns {
-			if strings.Contains(lowerInput, pattern) {
+	if strings.Contains(s, "'") {
+		for _, p := range sqlCtx {
+			if strings.Contains(s, p) {
 				return true
 			}
 		}
 	}
-
-	// Vérifier les patterns de commande SQL sans apostrophes
-	standaloneCommands := []string{
-		"; drop ",
-		"; delete ",
-		"; insert ",
-		"; update ",
-		"; create ",
-		"; alter ",
-	}
-
-	for _, cmd := range standaloneCommands {
-		if strings.Contains(lowerInput, cmd) {
+	for _, p := range sqlCmd {
+		if strings.Contains(s, p) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// Fonction spécialisée pour la biographie (encore plus permissive)
 func ValidateBiographyContent(bio string) error {
-	// Pour une biographie, on est encore plus permissif
-	bio = strings.ToLower(strings.TrimSpace(bio))
-
-	// Seulement les patterns VRAIMENT dangereux
-	veryDangerousPatterns := []string{
-		"'; drop",
-		"'; delete",
-		"union select",
-		"' or 1=1",
-		"admin'--",
-		"waitfor delay",
-		"/**/",
-		"@@version",
-	}
-
-	for _, pattern := range veryDangerousPatterns {
-		if strings.Contains(bio, pattern) {
+	s := strings.ToLower(strings.TrimSpace(bio))
+	for _, p := range []string{"'; drop", "'; delete", "union select", "' or 1=1", "admin'--", "waitfor delay", "/**/", "@@version"} {
+		if strings.Contains(s, p) {
 			return fmt.Errorf("contenu suspect détecté")
 		}
 	}
-
 	return nil
 }
 
-// ValidateUserInput valide spécifiquement les entrées utilisateur
-func ValidateUserInput(input string, fieldName string) error {
-	// Vérifications spécifiques selon le type de champ
-	switch fieldName {
+func ValidateUserInput(input, field string) error {
+	switch field {
 	case "username":
 		return validateUsername(input)
 	case "email":
@@ -129,142 +76,65 @@ func ValidateUserInput(input string, fieldName string) error {
 		return validateBiography(input)
 	case "tag":
 		return validateTag(input)
-	case "firstname": // ✅ NOUVEAU
-		return validateFirstName(input)
-	case "lastname": // ✅ NOUVEAU
-		return validateLastName(input)
+	case "firstname":
+		return validateName(input, "prénom")
+	case "lastname":
+		return validateName(input, "nom")
 	default:
-		// Validation générale
-		return validateGeneralInput(input)
+		return validateGeneral(input)
 	}
 }
 
-// validateUsername valide un nom d'utilisateur contre les injections
-func validateUsername(username string) error {
-	if containsSQLInjection(username) {
-		return fmt.Errorf("nom d'utilisateur contient des caractères non autorisés")
-	}
-
-	// Seuls les caractères alphanumériques et _ sont autorisés
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9_]+$`, username)
-	if !matched {
+func validateUsername(v string) error {
+	if containsSQLInjection(v) || !userRe.MatchString(v) {
 		return fmt.Errorf("nom d'utilisateur invalide")
 	}
-
 	return nil
 }
 
-// validateEmail valide un email contre les injections
-func validateEmail(email string) error {
-	if containsSQLInjection(email) {
-		return fmt.Errorf("email contient des caractères non autorisés")
-	}
-
-	// Pattern email simple mais sécurisé
-	matched, _ := regexp.MatchString(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$`, email)
-	if !matched {
+func validateEmail(v string) error {
+	if containsSQLInjection(v) || !emailRe.MatchString(v) {
 		return fmt.Errorf("format d'email invalide")
 	}
-
 	return nil
 }
 
-// validateBiography valide une biographie
-func validateBiography(bio string) error {
-	if containsSQLInjection(bio) {
+func validateBiography(v string) error {
+	if containsSQLInjection(v) || containsHTML(v) {
 		return fmt.Errorf("biographie contient des caractères non autorisés")
 	}
-
-	// Supprimer les balises HTML potentiellement dangereuses
-	if containsHTML(bio) {
-		return fmt.Errorf("biographie ne peut pas contenir de balises HTML")
-	}
-
 	return nil
 }
 
-// validateTag valide un tag
-func validateTag(tag string) error {
-	if containsSQLInjection(tag) {
-		return fmt.Errorf("tag contient des caractères non autorisés")
-	}
-
-	// Les tags doivent être alphanumériques avec #
-	matched, _ := regexp.MatchString(`^#[a-zA-Z0-9]+$`, tag)
-	if !matched {
+func validateTag(v string) error {
+	if containsSQLInjection(v) || !tagRe.MatchString(v) {
 		return fmt.Errorf("format de tag invalide")
 	}
-
 	return nil
 }
 
-// validateGeneralInput validation générale
-func validateGeneralInput(input string) error {
-	if containsSQLInjection(input) {
+func validateName(v, label string) error {
+	if containsSQLInjection(v) || containsHTML(v) || !nameRe.MatchString(v) {
+		return fmt.Errorf("%s contient des caractères non autorisés", label)
+	}
+	return nil
+}
+
+func validateGeneral(v string) error {
+	if containsSQLInjection(v) {
 		return fmt.Errorf("entrée contient des caractères non autorisés")
 	}
-
 	return nil
 }
 
-// containsHTML détecte les balises HTML
-func containsHTML(input string) bool {
-	htmlPattern := `<[^>]*>`
-	matched, _ := regexp.MatchString(htmlPattern, input)
-	return matched
-}
+func containsHTML(input string) bool { return htmlTagRe.MatchString(input) }
 
-// LogSuspiciousActivity enregistre les tentatives d'injection
-func LogSuspiciousActivity(userID int, input string, endpoint string) {
-	// Dans un vrai projet, enregistrer dans un système de logs sécurisé
-	fmt.Printf("SECURITY ALERT: Tentative d'injection détectée - User: %d, Endpoint: %s, Input: %s\n",
-		userID, endpoint, input[:min(50, len(input))])
-}
-
-// min retourne le minimum entre deux entiers
-func min(a, b int) int {
-	if a < b {
-		return a
+func LogSuspiciousActivity(userID int, input, endpoint string) {
+	msg := input
+	if len(msg) > 200 {
+		msg = msg[:200]
 	}
-	return b
-}
-
-// validateFirstName valide un prénom contre les injections
-func validateFirstName(firstName string) error {
-	if containsSQLInjection(firstName) {
-		return fmt.Errorf("prénom contient des caractères non autorisés")
-	}
-
-	// Supprimer les balises HTML potentiellement dangereuses
-	if containsHTML(firstName) {
-		return fmt.Errorf("prénom ne peut pas contenir de balises HTML")
-	}
-
-	// Seuls les caractères alphabétiques, espaces, apostrophes et tirets sont autorisés
-	matched, _ := regexp.MatchString(`^[a-zA-ZÀ-ÿ\s'\-]+$`, firstName)
-	if !matched {
-		return fmt.Errorf("prénom contient des caractères non autorisés")
-	}
-
-	return nil
-}
-
-// validateLastName valide un nom de famille contre les injections
-func validateLastName(lastName string) error {
-	if containsSQLInjection(lastName) {
-		return fmt.Errorf("nom contient des caractères non autorisés")
-	}
-
-	// Supprimer les balises HTML potentiellement dangereuses
-	if containsHTML(lastName) {
-		return fmt.Errorf("nom ne peut pas contenir de balises HTML")
-	}
-
-	// Seuls les caractères alphabétiques, espaces, apostrophes et tirets sont autorisés
-	matched, _ := regexp.MatchString(`^[a-zA-ZÀ-ÿ\s'\-]+$`, lastName)
-	if !matched {
-		return fmt.Errorf("nom contient des caractères non autorisés")
-	}
-
-	return nil
+	msg = strings.ReplaceAll(msg, "\n", " ")
+	msg = strings.ReplaceAll(msg, "\r", " ")
+	fmt.Printf("SECURITY ALERT user=%d endpoint=%s input_preview=%q\n", userID, endpoint, msg)
 }

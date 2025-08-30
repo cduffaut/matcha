@@ -9,489 +9,297 @@ import (
 	"image/jpeg"
 	"image/png"
 	"mime/multipart"
+	"net/http"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/rwcarlsen/goexif/exif"
 )
 
-// Configuration des uploads
+/* ===== config ===== */
+
 const (
 	MaxFileSize    = 8 * 1024 * 1024
 	MaxImageWidth  = 5000
 	MaxImageHeight = 5000
+	MinImageWidth  = 50
+	MinImageHeight = 50
 )
 
-// Types MIME autorisés pour les images
-var allowedMimeTypes = map[string]bool{
-	"image/jpeg": true,
-	"image/jpg":  true,
-	"image/png":  true,
-	"image/gif":  true,
-}
+var (
+	allowedMimes = map[string]struct{}{
+		"image/jpeg": {}, "image/jpg": {}, "image/png": {}, "image/gif": {},
+	}
+	allowedExts = map[string]struct{}{
+		".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {},
+	}
+	filenameBadChars = regexp.MustCompile(`[^A-Za-z0-9._-]`)
+)
 
-// Extensions autorisées
-var allowedExtensions = map[string]bool{
-	".jpg":  true,
-	".jpeg": true,
-	".png":  true,
-	".gif":  true,
-}
+/* ===== types ===== */
 
-// FileValidationError représente une erreur de validation de fichier
-type FileValidationError struct {
-	Message string
-}
+type FileValidationError struct{ Message string }
 
-func (e FileValidationError) Error() string {
-	return e.Message
-}
+func (e FileValidationError) Error() string { return e.Message }
 
-// ValidateImageUpload valide un fichier image uploadé
-func ValidateImageUpload(fileHeader *multipart.FileHeader, fileData []byte) error {
-	// Vérifier la taille du fichier
-	if len(fileData) > MaxFileSize {
-		return FileValidationError{
-			Message: fmt.Sprintf("le fichier est trop volumineux (max %d MB)", MaxFileSize/1024/1024),
-		}
+/* ===== public API ===== */
+
+func ValidateImageUpload(h *multipart.FileHeader, data []byte) error {
+	if len(data) == 0 {
+		return FileValidationError{"le fichier est vide"}
+	}
+	if len(data) > MaxFileSize {
+		return FileValidationError{fmt.Sprintf("le fichier est trop volumineux (max %d MB)", MaxFileSize/1024/1024)}
 	}
 
-	if len(fileData) == 0 {
-		return FileValidationError{Message: "le fichier est vide"}
+	ext := strings.ToLower(filepath.Ext(h.Filename))
+	if _, ok := allowedExts[ext]; !ok {
+		return FileValidationError{"type de fichier non autorisé (JPG/PNG/GIF)"}
 	}
 
-	// Vérifier l'extension
-	ext := strings.ToLower(filepath.Ext(fileHeader.Filename))
-	if !allowedExtensions[ext] {
-		return FileValidationError{
-			Message: "type de fichier non autorisé. Seuls les fichiers JPG, PNG et GIF sont acceptés",
-		}
+	decl := normalizeMime(h.Header.Get("Content-Type"))
+	if _, ok := allowedMimes[decl]; !ok {
+		return FileValidationError{"type MIME non autorisé"}
 	}
 
-	// Vérifier le type MIME déclaré
-	contentType := fileHeader.Header.Get("Content-Type")
-	if !allowedMimeTypes[contentType] {
-		return FileValidationError{
-			Message: "type MIME non autorisé",
-		}
-	}
-
-	// Vérifier le type réel du fichier en analysant les magic bytes
-	realType, err := detectImageType(fileData)
+	detected, err := detectImageType(data)
 	if err != nil {
-		return FileValidationError{Message: "impossible de détecter le type de fichier"}
+		return FileValidationError{"impossible de détecter le type de fichier"}
+	}
+	if normalizeMime(decl) != normalizeMime(detected) {
+		return FileValidationError{"le type déclaré ne correspond pas au contenu"}
 	}
 
-	// Vérifier que le type déclaré correspond au type réel
-	if !isContentTypeMatchingDetected(contentType, realType) {
-		return FileValidationError{
-			Message: "le type de fichier déclaré ne correspond pas au contenu réel",
-		}
-	}
-
-	// Vérifier les dimensions de l'image
-	if err := validateImageDimensions(fileData); err != nil {
+	if err := validateImageDimensions(data); err != nil {
 		return err
 	}
-
-	// Vérifier qu'il n'y a pas de contenu malveillant
-	if err := scanForMaliciousContent(fileData); err != nil {
+	if err := scanForMaliciousContent(data); err != nil {
 		return err
 	}
-
 	return nil
 }
 
-// detectImageType détecte le type réel d'une image à partir de ses magic bytes
-func detectImageType(data []byte) (string, error) {
-	if len(data) < 12 {
-		return "", fmt.Errorf("fichier trop petit")
+func SanitizeFilename(name string) string {
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "" || name == "." {
+		return "file"
 	}
+	ext := strings.ToLower(filepath.Ext(name))
+	base := strings.TrimSuffix(name, ext)
+	base = filenameBadChars.ReplaceAllString(base, "_")
+	if len(base) > 96 {
+		base = base[:96]
+	}
+	if ext == "" {
+		ext = ".bin"
+	}
+	return base + ext
+}
 
-	// PNG magic bytes: 89 50 4E 47 0D 0A 1A 0A
-	if bytes.HasPrefix(data, []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}) {
+func ProcessAndValidateImage(h *multipart.FileHeader, data []byte) ([]byte, error) {
+	if err := ValidateImageUpload(h, data); err != nil {
+		return nil, err
+	}
+	out, err := reencodeImage(data)
+	if err != nil {
+		return nil, FileValidationError{"erreur lors du traitement de l'image"}
+	}
+	return out, nil
+}
+
+/* ===== internals ===== */
+
+func normalizeMime(t string) string {
+	t = strings.ToLower(strings.TrimSpace(t))
+	if t == "image/jpg" {
+		return "image/jpeg"
+	}
+	return t
+}
+
+func detectImageType(b []byte) (string, error) {
+	// quick magic-bytes
+	switch {
+	case len(b) >= 8 && bytes.HasPrefix(b, []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}):
 		return "image/png", nil
-	}
-
-	// JPEG magic bytes: FF D8 FF
-	if bytes.HasPrefix(data, []byte{0xFF, 0xD8, 0xFF}) {
+	case len(b) >= 3 && bytes.HasPrefix(b, []byte{0xFF, 0xD8, 0xFF}):
 		return "image/jpeg", nil
-	}
-
-	// GIF magic bytes: GIF87a ou GIF89a
-	if bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a")) {
+	case len(b) >= 6 && (bytes.HasPrefix(b, []byte("GIF87a")) || bytes.HasPrefix(b, []byte("GIF89a"))):
 		return "image/gif", nil
 	}
-
-	return "", fmt.Errorf("type de fichier non reconnu")
+	// fallback
+	return http.DetectContentType(b), nil
 }
 
-// isContentTypeMatchingDetected vérifie si le type MIME déclaré correspond au type détecté
-func isContentTypeMatchingDetected(declared, detected string) bool {
-	// Normaliser les types MIME
-	normalizeType := func(t string) string {
-		if t == "image/jpg" {
-			return "image/jpeg"
-		}
-		return t
+func scanForMaliciousContent(b []byte) error {
+	// inspect small header window only
+	n := 1024
+	if len(b) < n {
+		n = len(b)
 	}
-
-	return normalizeType(declared) == normalizeType(detected)
-}
-
-// scanForMaliciousContent amélioré - respecte le sujet mais évite les faux positifs
-func scanForMaliciousContent(data []byte) error {
-	// Le sujet exige la validation des uploads, donc on garde cette fonction
-	// mais on l'améliore pour éviter les faux positifs sur les vraies photos
-
-	// Étape 1: Vérifier que c'est vraiment une image valide
-	// Si l'image peut être décodée, c'est probablement légitime
-	reader := bytes.NewReader(data)
-	_, format, err := image.DecodeConfig(reader)
-	if err != nil {
-		// Si on ne peut pas décoder l'image, elle est suspecte
-		return FileValidationError{Message: "fichier image invalide ou corrompu"}
-	}
-
-	// Étape 2: Scanner seulement les premiers bytes (headers EXIF/métadonnées)
-	// Les vraies injections sont généralement dans cette zone
-	scanSize := 1024 // Premiers 1KB seulement
-	if len(data) < scanSize {
-		scanSize = len(data)
-	}
-	scanData := data[:scanSize]
-
-	// Étape 3: Chercher des patterns vraiment suspects dans les métadonnées
-	// On convertit en string pour chercher du texte lisible
-	dataStr := string(scanData)
-
-	// Patterns vraiment dangereux (conformes aux exigences de sécurité du sujet)
-	dangerousPatterns := []string{
-		"<?php",       // Scripts PHP
-		"<%",          // Scripts ASP/JSP
-		"<script",     // JavaScript malveillant
-		"javascript:", // Liens JavaScript
-		"vbscript:",   // VBScript malveillant
-		"<iframe",     // Iframes malveillantes
-		"<object",     // Objects malveillants
-		"<embed",      // Embeds malveillants
-	}
-
-	dataLower := strings.ToLower(dataStr)
-
-	for _, pattern := range dangerousPatterns {
-		if strings.Contains(dataLower, pattern) {
-			// Vérification supplémentaire: s'assurer que c'est du vrai code
-			if isRealScriptContent(dataStr, pattern) {
-				return FileValidationError{Message: "contenu script détecté dans le fichier image"}
-			}
+	s := strings.ToLower(string(b[:n]))
+	danger := []string{"<?php", "<script", "javascript:", "vbscript:", "<iframe", "<object", "<embed", "<%"}
+	for _, d := range danger {
+		if i := strings.Index(s, d); i >= 0 && looksLikeScript(s[i:]) {
+			return FileValidationError{"contenu script détecté dans l'image"}
 		}
 	}
-
-	// Étape 4: Vérifier la cohérence format/extension
-	// Une vraie image doit avoir un format cohérent
-	expectedFormats := map[string]bool{
-		"jpeg": true,
-		"png":  true,
-		"gif":  true,
+	// ensure decoded format is supported
+	if _, format, err := image.DecodeConfig(bytes.NewReader(b)); err != nil {
+		return FileValidationError{"fichier image invalide ou corrompu"}
+	} else if format != "jpeg" && format != "png" && format != "gif" {
+		return FileValidationError{"format d'image non supporté"}
 	}
-
-	if !expectedFormats[format] {
-		return FileValidationError{Message: "format d'image non supporté"}
-	}
-
 	return nil
 }
 
-// isRealScriptContent vérifie si le contenu ressemble vraiment à du script
-func isRealScriptContent(data, pattern string) bool {
-	index := strings.Index(strings.ToLower(data), pattern)
-	if index == -1 {
-		return false
+func looksLikeScript(ctx string) bool {
+	if len(ctx) > 64 {
+		ctx = ctx[:64]
 	}
-
-	// Vérifier le contexte : chercher des caractères de script typiques
-	start := index
-	end := index + len(pattern) + 50
-	if end > len(data) {
-		end = len(data)
-	}
-
-	context := strings.ToLower(data[start:end])
-
-	// Chercher des patterns de script typiques après le tag
-	scriptPatterns := []string{
-		">",    // Fermeture de tag HTML
-		"=",    // Assignation
-		"(",    // Appel de fonction
-		"{",    // Bloc de code
-		"src=", // Attribut source
-	}
-
-	for _, scriptPattern := range scriptPatterns {
-		if strings.Contains(context, scriptPattern) {
+	for _, p := range []string{">", "=", "(", "{", "src="} {
+		if strings.Contains(ctx, p) {
 			return true
 		}
 	}
-
 	return false
 }
 
-// validateImageDimensions mise à jour avec messages plus clairs
-func validateImageDimensions(data []byte) error {
-	reader := bytes.NewReader(data)
-
-	config, _, err := image.DecodeConfig(reader)
+func validateImageDimensions(b []byte) error {
+	cfg, _, err := image.DecodeConfig(bytes.NewReader(b))
 	if err != nil {
-		return FileValidationError{Message: "impossible de lire les propriétés de l'image"}
+		return FileValidationError{"impossible de lire les propriétés de l'image"}
 	}
-
-	if config.Width > MaxImageWidth || config.Height > MaxImageHeight {
-		return FileValidationError{
-			Message: fmt.Sprintf("image trop grande (%dx%d pixels). Maximum autorisé : %dx%d pixels. Essayez de redimensionner votre image.",
-				config.Width, config.Height, MaxImageWidth, MaxImageHeight),
-		}
+	if cfg.Width > MaxImageWidth || cfg.Height > MaxImageHeight {
+		return FileValidationError{fmt.Sprintf(
+			"image trop grande (%dx%d). Maximum %dx%d pixels",
+			cfg.Width, cfg.Height, MaxImageWidth, MaxImageHeight)}
 	}
-
-	if config.Width < 50 || config.Height < 50 {
-		return FileValidationError{
-			Message: fmt.Sprintf("image trop petite (%dx%d pixels). Minimum requis : 50x50 pixels",
-				config.Width, config.Height),
-		}
+	if cfg.Width < MinImageWidth || cfg.Height < MinImageHeight {
+		return FileValidationError{fmt.Sprintf(
+			"image trop petite (%dx%d). Minimum %dx%d pixels",
+			cfg.Width, cfg.Height, MinImageWidth, MinImageHeight)}
 	}
-
 	return nil
 }
 
-////////////////////////////////////////////////////////////
-
-// SanitizeFilename nettoie un nom de fichier
-func SanitizeFilename(filename string) string {
-	// Obtenir seulement le nom de base (sans le chemin)
-	filename = filepath.Base(filename)
-
-	// Remplacer les caractères dangereux
-	dangerous := []string{
-		"..", "/", "\\", ":", "*", "?", "\"", "<", ">", "|",
-		"\x00", "\x01", "\x02", "\x03", "\x04", "\x05", "\x06", "\x07",
-		"\x08", "\x09", "\x0a", "\x0b", "\x0c", "\x0d", "\x0e", "\x0f",
-		"\x10", "\x11", "\x12", "\x13", "\x14", "\x15", "\x16", "\x17",
-		"\x18", "\x19", "\x1a", "\x1b", "\x1c", "\x1d", "\x1e", "\x1f",
-	}
-
-	for _, char := range dangerous {
-		filename = strings.ReplaceAll(filename, char, "_")
-	}
-
-	// Limiter la longueur
-	if len(filename) > 100 {
-		ext := filepath.Ext(filename)
-		name := strings.TrimSuffix(filename, ext)
-		filename = name[:100-len(ext)] + ext
-	}
-
-	// S'assurer qu'il y a au moins un nom
-	if filename == "" || filename == "." {
-		filename = "file"
-	}
-
-	return filename
-}
-
-// ProcessAndValidateImage traite et valide une image
-func ProcessAndValidateImage(fileHeader *multipart.FileHeader, fileData []byte) ([]byte, error) {
-	// Valider le fichier
-	if err := ValidateImageUpload(fileHeader, fileData); err != nil {
-		return nil, err
-	}
-
-	// Réencoder l'image pour supprimer les métadonnées EXIF potentiellement dangereuses
-	processedData, err := reencodeImage(fileData)
-	if err != nil {
-		return nil, FileValidationError{Message: "erreur lors du traitement de l'image"}
-	}
-
-	return processedData, nil
-}
-
-// reencodeImage réencode une image pour supprimer les métadonnées
-func reencodeImage(data []byte) ([]byte, error) {
-	reader := bytes.NewReader(data)
-
-	// Décoder l'image
-	img, format, err := image.Decode(reader)
+func reencodeImage(b []byte) ([]byte, error) {
+	img, format, err := image.Decode(bytes.NewReader(b))
 	if err != nil {
 		return nil, err
 	}
-
-	// CORRECTION: Lire et appliquer l'orientation EXIF avant de supprimer les métadonnées
-	orientedImg, err := applyEXIFOrientation(data, img)
-	if err != nil {
-		// Si on ne peut pas lire l'EXIF, utiliser l'image originale
-		orientedImg = img
+	if oriented, err := applyEXIFOrientation(b, img); err == nil {
+		img = oriented
 	}
-
-	// Réencoder l'image orientée (sans métadonnées EXIF)
 	var buf bytes.Buffer
 	switch format {
 	case "jpeg":
-		err = jpeg.Encode(&buf, orientedImg, &jpeg.Options{Quality: 85})
+		err = jpeg.Encode(&buf, img, &jpeg.Options{Quality: 85})
 	case "png":
-		err = png.Encode(&buf, orientedImg)
+		err = png.Encode(&buf, img)
 	case "gif":
-		err = gif.Encode(&buf, orientedImg, nil)
+		err = gif.Encode(&buf, img, nil)
 	default:
 		return nil, fmt.Errorf("format non supporté: %s", format)
 	}
-
 	if err != nil {
 		return nil, err
 	}
-
 	return buf.Bytes(), nil
 }
 
-// applyEXIFOrientation applique la rotation selon les métadonnées EXIF
-func applyEXIFOrientation(data []byte, img image.Image) (image.Image, error) {
-	// Lire les métadonnées EXIF
-	reader := bytes.NewReader(data)
-	exifData, err := exif.Decode(reader)
-	if err != nil {
-		// Pas d'EXIF ou erreur de lecture, retourner l'image telle quelle
-		return img, nil
-	}
-
-	// Récupérer la tag d'orientation
-	orientationTag, err := exifData.Get(exif.Orientation)
-	if err != nil {
-		// Pas d'orientation spécifiée, retourner l'image telle quelle
-		return img, nil
-	}
-
-	orientation, err := orientationTag.Int(0)
+func applyEXIFOrientation(src []byte, img image.Image) (image.Image, error) {
+	x, err := exif.Decode(bytes.NewReader(src))
 	if err != nil {
 		return img, nil
 	}
-
-	// Appliquer la transformation selon l'orientation EXIF
-	switch orientation {
-	case 1:
-		// Normal - pas de transformation
+	tag, err := x.Get(exif.Orientation)
+	if err != nil {
 		return img, nil
+	}
+	v, err := tag.Int(0)
+	if err != nil {
+		return img, nil
+	}
+	switch v {
 	case 2:
-		// Miroir horizontal
 		return flipHorizontal(img), nil
 	case 3:
-		// Rotation 180°
 		return rotate180(img), nil
 	case 4:
-		// Miroir vertical
 		return flipVertical(img), nil
 	case 5:
-		// Miroir horizontal + rotation 90° horaire
 		return rotate90Clockwise(flipHorizontal(img)), nil
 	case 6:
-		// Rotation 90° horaire
 		return rotate90Clockwise(img), nil
 	case 7:
-		// Miroir horizontal + rotation 90° anti-horaire
 		return rotate90CounterClockwise(flipHorizontal(img)), nil
 	case 8:
-		// Rotation 90° anti-horaire
 		return rotate90CounterClockwise(img), nil
 	default:
 		return img, nil
 	}
 }
 
-// Fonctions de transformation d'image
+/* ===== transforms ===== */
+
 func rotate90Clockwise(img image.Image) image.Image {
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	// Créer une nouvelle image avec dimensions inversées
-	rotated := image.NewRGBA(image.Rect(0, 0, h, w))
-
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			// Rotation 90° horaire: (x,y) -> (h-1-y, x)
-			newX := h - 1 - (y - bounds.Min.Y)
-			newY := x - bounds.Min.X
-			rotated.Set(newX, newY, img.At(x, y))
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	out := image.NewRGBA(image.Rect(0, 0, h, w))
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			out.Set(h-1-(y-b.Min.Y), x-b.Min.X, img.At(x, y))
 		}
 	}
-
-	return rotated
+	return out
 }
 
 func rotate90CounterClockwise(img image.Image) image.Image {
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	rotated := image.NewRGBA(image.Rect(0, 0, h, w))
-
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			// Rotation 90° anti-horaire: (x,y) -> (y, w-1-x)
-			newX := y - bounds.Min.Y
-			newY := w - 1 - (x - bounds.Min.X)
-			rotated.Set(newX, newY, img.At(x, y))
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	out := image.NewRGBA(image.Rect(0, 0, h, w))
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			out.Set(y-b.Min.Y, w-1-(x-b.Min.X), img.At(x, y))
 		}
 	}
-
-	return rotated
+	return out
 }
 
 func rotate180(img image.Image) image.Image {
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	rotated := image.NewRGBA(image.Rect(0, 0, w, h))
-
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			// Rotation 180°: (x,y) -> (w-1-x, h-1-y)
-			newX := w - 1 - (x - bounds.Min.X)
-			newY := h - 1 - (y - bounds.Min.Y)
-			rotated.Set(newX, newY, img.At(x, y))
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			out.Set(w-1-(x-b.Min.X), h-1-(y-b.Min.Y), img.At(x, y))
 		}
 	}
-
-	return rotated
+	return out
 }
 
 func flipHorizontal(img image.Image) image.Image {
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	flipped := image.NewRGBA(image.Rect(0, 0, w, h))
-
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			// Miroir horizontal: (x,y) -> (w-1-x, y)
-			newX := w - 1 - (x - bounds.Min.X)
-			newY := y - bounds.Min.Y
-			flipped.Set(newX, newY, img.At(x, y))
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			out.Set(w-1-(x-b.Min.X), y-b.Min.Y, img.At(x, y))
 		}
 	}
-
-	return flipped
+	return out
 }
 
 func flipVertical(img image.Image) image.Image {
-	bounds := img.Bounds()
-	w, h := bounds.Dx(), bounds.Dy()
-
-	flipped := image.NewRGBA(image.Rect(0, 0, w, h))
-
-	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
-		for x := bounds.Min.X; x < bounds.Max.X; x++ {
-			// Miroir vertical: (x,y) -> (x, h-1-y)
-			newX := x - bounds.Min.X
-			newY := h - 1 - (y - bounds.Min.Y)
-			flipped.Set(newX, newY, img.At(x, y))
+	b := img.Bounds()
+	w, h := b.Dx(), b.Dy()
+	out := image.NewRGBA(image.Rect(0, 0, w, h))
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			out.Set(x-b.Min.X, h-1-(y-b.Min.Y), img.At(x, y))
 		}
 	}
-
-	return flipped
+	return out
 }

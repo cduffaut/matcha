@@ -1,147 +1,131 @@
-// internal/session/session.go
 package session
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
-	"fmt"
+	"errors"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/cduffaut/matcha/internal/models"
 )
 
-// Session représente une session utilisateur
 type Session struct {
 	UserID    int
 	Username  string
 	ExpiresAt time.Time
 }
 
-// Manager gère les sessions utilisateur
 type Manager struct {
 	CookieName string
-	Sessions   map[string]Session
+	Duration   time.Duration
+	SameSite   http.SameSite
+	Secure     bool
+
+	mu       sync.RWMutex
+	sessions map[string]Session
 }
 
-// NewManager crée un nouveau gestionnaire de session
 func NewManager(cookieName string) *Manager {
 	return &Manager{
 		CookieName: cookieName,
-		Sessions:   make(map[string]Session),
+		Duration:   24 * time.Hour,
+		SameSite:   http.SameSiteLaxMode,
+		Secure:     false, // set true in prod behind HTTPS
+		sessions:   make(map[string]Session),
 	}
 }
 
-// CreateSession crée une nouvelle session pour un utilisateur
 func (m *Manager) CreateSession(w http.ResponseWriter, user *models.User) (string, error) {
-
-	// Générer un token de session
-	sessionToken, err := generateRandomToken(32)
+	token, err := randomToken(32)
 	if err != nil {
-		return "", fmt.Errorf("erreur lors de la génération du token de session: %w", err)
+		return "", err
 	}
-
-	// Créer la session
-	session := Session{
+	s := Session{
 		UserID:    user.ID,
 		Username:  user.Username,
-		ExpiresAt: time.Now().Add(24 * time.Hour), // Session de 24 heures
+		ExpiresAt: time.Now().UTC().Add(m.Duration),
 	}
 
-	// Stocker la session
-	m.Sessions[sessionToken] = session
+	m.mu.Lock()
+	m.sessions[token] = s
+	m.mu.Unlock()
 
-	// CORRECTION : Créer le cookie avec les paramètres corrects
-	cookie := http.Cookie{
+	http.SetCookie(w, &http.Cookie{
 		Name:     m.CookieName,
-		Value:    sessionToken,
-		Expires:  session.ExpiresAt,
-		HttpOnly: true,
+		Value:    token,
 		Path:     "/",
-		SameSite: http.SameSiteLaxMode, // Important pour les tests
-		Secure:   false,                // False en développement
-	}
-
-	// Définir le cookie dans la réponse
-	http.SetCookie(w, &cookie)
-
-	return sessionToken, nil
+		HttpOnly: true,
+		SameSite: m.SameSite,
+		Secure:   m.Secure,
+		Expires:  s.ExpiresAt,
+		MaxAge:   int(m.Duration.Seconds()),
+	})
+	return token, nil
 }
 
-// GetSession récupère une session à partir d'une requête
 func (m *Manager) GetSession(r *http.Request) (*Session, error) {
-	for _, cookie := range r.Cookies() {
-		fmt.Printf("  - %s = %s\n", cookie.Name, cookie.Value)
-	}
-
-	// Récupérer le cookie de session
-	cookie, err := r.Cookie(m.CookieName)
+	c, err := r.Cookie(m.CookieName)
 	if err != nil {
-		return nil, fmt.Errorf("pas de session trouvée: %w", err)
+		return nil, err
 	}
 
-	// Récupérer la session
-	session, exists := m.Sessions[cookie.Value]
-	if !exists {
-		return nil, fmt.Errorf("session invalide: %s", cookie.Value)
+	m.mu.RLock()
+	s, ok := m.sessions[c.Value]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, errors.New("session inconnue")
 	}
-
-	// Vérifier si la session a expiré
-	if time.Now().After(session.ExpiresAt) {
-		delete(m.Sessions, cookie.Value)
-		return nil, fmt.Errorf("session expirée")
+	if time.Now().UTC().After(s.ExpiresAt) {
+		m.mu.Lock()
+		delete(m.sessions, c.Value)
+		m.mu.Unlock()
+		return nil, errors.New("session expirée")
 	}
-
-	return &session, nil
+	return &s, nil
 }
 
-// DestroySession détruit une session
 func (m *Manager) DestroySession(w http.ResponseWriter, r *http.Request) error {
-	// Récupérer le cookie de session
-	cookie, err := r.Cookie(m.CookieName)
-	if err != nil {
-		return nil // Pas de session à détruire
+	c, err := r.Cookie(m.CookieName)
+	if err == nil {
+		m.mu.Lock()
+		delete(m.sessions, c.Value)
+		m.mu.Unlock()
 	}
-
-	// Supprimer la session
-	delete(m.Sessions, cookie.Value)
-
-	// Expirer le cookie
-	expiredCookie := http.Cookie{
+	http.SetCookie(w, &http.Cookie{
 		Name:     m.CookieName,
 		Value:    "",
-		Expires:  time.Now().Add(-1 * time.Hour),
-		HttpOnly: true,
 		Path:     "/",
-		SameSite: http.SameSiteLaxMode,
-		Secure:   false,
-	}
-
-	http.SetCookie(w, &expiredCookie)
-
+		HttpOnly: true,
+		SameSite: m.SameSite,
+		Secure:   m.Secure,
+		Expires:  time.Unix(0, 0),
+		MaxAge:   -1,
+	})
 	return nil
 }
 
-// Clé pour stocker la session dans le contexte
+/* ---- context helpers ---- */
+
 type sessionKeyType struct{}
 
 var sessionKey = sessionKeyType{}
 
-// WithSession ajoute une session au contexte
-func WithSession(ctx context.Context, session *Session) context.Context {
-	return context.WithValue(ctx, sessionKey, session)
+func WithSession(ctx context.Context, s *Session) context.Context {
+	return context.WithValue(ctx, sessionKey, s)
 }
 
-// FromContext récupère la session du contexte
 func FromContext(ctx context.Context) (*Session, bool) {
-	session, ok := ctx.Value(sessionKey).(*Session)
-	return session, ok
+	s, ok := ctx.Value(sessionKey).(*Session)
+	return s, ok
 }
 
-// generateRandomToken génère un token aléatoire de la taille spécifiée
-func generateRandomToken(length int) (string, error) {
-	b := make([]byte, length)
+/* ---- internals ---- */
+
+func randomToken(n int) (string, error) {
+	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}

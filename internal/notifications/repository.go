@@ -5,135 +5,86 @@ import (
 	"fmt"
 )
 
-// PostgresNotificationRepository implémentation PostgreSQL du repository
-type PostgresNotificationRepository struct {
-	db *sql.DB
-}
+type PostgresNotificationRepository struct{ db *sql.DB }
 
-// NewPostgresNotificationRepository crée un nouveau repository
 func NewPostgresNotificationRepository(db *sql.DB) NotificationRepository {
 	return &PostgresNotificationRepository{db: db}
 }
 
-// Create crée une nouvelle notification
-func (r *PostgresNotificationRepository) Create(notification *Notification) error {
-	query := `
+func (r *PostgresNotificationRepository) Create(n *Notification) error {
+	const q = `
 		INSERT INTO notifications (user_id, from_id, type, message, is_read)
 		VALUES ($1, $2, $3, $4, $5)
-		RETURNING id, created_at
-	`
-
-	err := r.db.QueryRow(
-		query,
-		notification.UserID,
-		notification.FromID,
-		notification.Type,
-		notification.Message,
-		notification.IsRead,
-	).Scan(&notification.ID, &notification.CreatedAt)
-
-	if err != nil {
-		return fmt.Errorf("erreur lors de la création de la notification: %w", err)
+		RETURNING id, created_at`
+	if err := r.db.QueryRow(q, n.UserID, n.FromID, n.Type, n.Message, n.IsRead).
+		Scan(&n.ID, &n.CreatedAt); err != nil {
+		return fmt.Errorf("create notification: %w", err)
 	}
-
 	return nil
 }
 
-// GetByUserID récupère les notifications d'un utilisateur
-func (r *PostgresNotificationRepository) GetByUserID(userID int, limit int) ([]*Notification, error) {
-	query := `
+func (r *PostgresNotificationRepository) GetByUserID(userID, limit int) ([]*Notification, error) {
+	const q = `
 		SELECT n.id, n.user_id, n.from_id, n.type, n.message, n.is_read, n.created_at,
-			   u.username, CONCAT(u.first_name, ' ', u.last_name) as full_name
+		       u.username, COALESCE(u.first_name,'') || ' ' || COALESCE(u.last_name,'') AS full_name
 		FROM notifications n
-		JOIN users u ON n.from_id = u.id
+		JOIN users u ON u.id = n.from_id
 		WHERE n.user_id = $1
 		ORDER BY n.created_at DESC
-		LIMIT $2
-	`
-
-	rows, err := r.db.Query(query, userID, limit)
+		LIMIT $2`
+	rows, err := r.db.Query(q, userID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("erreur lors de la récupération des notifications: %w", err)
+		return nil, fmt.Errorf("get notifications: %w", err)
 	}
 	defer rows.Close()
 
-	var notifications []*Notification
+	ns := make([]*Notification, 0, limit)
 	for rows.Next() {
-		notification := &Notification{
-			FromUser: &UserInfo{},
+		n := &Notification{FromUser: &UserInfo{}}
+		if err := rows.Scan(
+			&n.ID, &n.UserID, &n.FromID, &n.Type, &n.Message, &n.IsRead, &n.CreatedAt,
+			&n.FromUser.Username, &n.FromUser.Name,
+		); err != nil {
+			return nil, fmt.Errorf("scan notification: %w", err)
 		}
-
-		err := rows.Scan(
-			&notification.ID,
-			&notification.UserID,
-			&notification.FromID,
-			&notification.Type,
-			&notification.Message,
-			&notification.IsRead,
-			&notification.CreatedAt,
-			&notification.FromUser.Username,
-			&notification.FromUser.Name,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("erreur lors de la lecture d'une notification: %w", err)
-		}
-
-		notification.FromUser.ID = notification.FromID
-		notifications = append(notifications, notification)
+		n.FromUser.ID = n.FromID
+		ns = append(ns, n)
 	}
-
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("erreur lors du parcours des notifications: %w", err)
+		return nil, fmt.Errorf("iterate notifications: %w", err)
 	}
-
-	return notifications, nil
+	return ns, nil
 }
 
-// MarkAsRead marque une notification comme lue
-func (r *PostgresNotificationRepository) MarkAsRead(notificationID int) error {
-	query := `UPDATE notifications SET is_read = TRUE WHERE id = $1`
-
-	_, err := r.db.Exec(query, notificationID)
-	if err != nil {
-		return fmt.Errorf("erreur lors du marquage de la notification comme lue: %w", err)
+func (r *PostgresNotificationRepository) MarkAsRead(id int) error {
+	const q = `UPDATE notifications SET is_read = TRUE WHERE id = $1`
+	if _, err := r.db.Exec(q, id); err != nil {
+		return fmt.Errorf("mark as read: %w", err)
 	}
-
 	return nil
 }
 
-// MarkAllAsRead marque toutes les notifications d'un utilisateur comme lues
 func (r *PostgresNotificationRepository) MarkAllAsRead(userID int) error {
-	query := `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE`
-
-	_, err := r.db.Exec(query, userID)
-	if err != nil {
-		return fmt.Errorf("erreur lors du marquage de toutes les notifications comme lues: %w", err)
+	const q = `UPDATE notifications SET is_read = TRUE WHERE user_id = $1 AND is_read = FALSE`
+	if _, err := r.db.Exec(q, userID); err != nil {
+		return fmt.Errorf("mark all as read: %w", err)
 	}
-
 	return nil
 }
 
-// GetUnreadCount récupère le nombre de notifications non lues
 func (r *PostgresNotificationRepository) GetUnreadCount(userID int) (int, error) {
-	query := `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = FALSE`
-
-	var count int
-	err := r.db.QueryRow(query, userID).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("erreur lors du comptage des notifications non lues: %w", err)
+	const q = `SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND is_read = FALSE`
+	var c int
+	if err := r.db.QueryRow(q, userID).Scan(&c); err != nil {
+		return 0, fmt.Errorf("unread count: %w", err)
 	}
-
-	return count, nil
+	return c, nil
 }
 
-// Delete supprime une notification
-func (r *PostgresNotificationRepository) Delete(notificationID int) error {
-	query := `DELETE FROM notifications WHERE id = $1`
-
-	_, err := r.db.Exec(query, notificationID)
-	if err != nil {
-		return fmt.Errorf("erreur lors de la suppression de la notification: %w", err)
+func (r *PostgresNotificationRepository) Delete(id int) error {
+	const q = `DELETE FROM notifications WHERE id = $1`
+	if _, err := r.db.Exec(q, id); err != nil {
+		return fmt.Errorf("delete notification: %w", err)
 	}
-
 	return nil
 }
