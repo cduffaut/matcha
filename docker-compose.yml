@@ -11,7 +11,7 @@ services:
     expose:
       - ${DB_PORT}
     volumes:
-      - ./internal/database/postgresql:/var/lib/postgresql/data
+      - ./internal/database/.postgresql:/var/lib/postgresql/data
       - ./mock:/mock:ro
     networks:
       - matcha-net
