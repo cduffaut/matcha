@@ -307,19 +307,6 @@ func ValidateCoordinates(lat, lon float64) error {
 	return nil
 }
 
-// ValidateAge valide un âge
-func ValidateAge(age int) error {
-	if age < 18 {
-		return ValidationError{Field: "age", Message: "vous devez avoir au moins 18 ans"}
-	}
-
-	if age > 120 {
-		return ValidationError{Field: "age", Message: "âge invalide"}
-	}
-
-	return nil
-}
-
 // SanitizeInput nettoie une chaîne d'entrée
 func SanitizeInput(input string) string {
 	// Supprimer les espaces en début et fin

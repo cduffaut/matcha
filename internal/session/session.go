@@ -96,15 +96,6 @@ func (m *Manager) GetSession(r *http.Request) (*Session, error) {
 	return &session, nil
 }
 
-// getSessionKeys retourne les clés des sessions pour le debug
-func (m *Manager) getSessionKeys() []string {
-	keys := make([]string, 0, len(m.Sessions))
-	for k := range m.Sessions {
-		keys = append(keys, k)
-	}
-	return keys
-}
-
 // DestroySession détruit une session
 func (m *Manager) DestroySession(w http.ResponseWriter, r *http.Request) error {
 	// Récupérer le cookie de session

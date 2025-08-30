@@ -13,29 +13,6 @@ type SQLSecurity struct {
 	db *sql.DB
 }
 
-// NewSQLSecurity crée une nouvelle instance de SQLSecurity
-func NewSQLSecurity(db *sql.DB) *SQLSecurity {
-	return &SQLSecurity{db: db}
-}
-
-// ValidateAndSanitizeSQLInput valide et nettoie les entrées SQL
-func ValidateAndSanitizeSQLInput(input string) (string, error) {
-	// Supprimer les espaces en début et fin
-	input = strings.TrimSpace(input)
-
-	// Vérifier la longueur
-	if len(input) > 1000 {
-		return "", fmt.Errorf("entrée trop longue")
-	}
-
-	// Détecter les tentatives d'injection SQL
-	if containsSQLInjection(input) {
-		return "", fmt.Errorf("tentative d'injection SQL détectée")
-	}
-
-	return input, nil
-}
-
 // containsSQLInjection détecte les patterns d'injection SQL
 func containsSQLInjection(input string) bool {
 	lowerInput := strings.ToLower(strings.TrimSpace(input))
@@ -140,40 +117,6 @@ func ValidateBiographyContent(bio string) error {
 	return nil
 }
 
-// SafeQuery exécute une requête de manière sécurisée avec validation
-func (s *SQLSecurity) SafeQuery(query string, args ...interface{}) (*sql.Rows, error) {
-	// Valider les arguments
-	for i, arg := range args {
-		if str, ok := arg.(string); ok {
-			validated, err := ValidateAndSanitizeSQLInput(str)
-			if err != nil {
-				return nil, fmt.Errorf("argument %d invalide: %w", i, err)
-			}
-			args[i] = validated
-		}
-	}
-
-	// Exécuter la requête
-	return s.db.Query(query, args...)
-}
-
-// SafeExec exécute une requête d'écriture de manière sécurisée
-func (s *SQLSecurity) SafeExec(query string, args ...interface{}) (sql.Result, error) {
-	// Valider les arguments
-	for i, arg := range args {
-		if str, ok := arg.(string); ok {
-			validated, err := ValidateAndSanitizeSQLInput(str)
-			if err != nil {
-				return nil, fmt.Errorf("argument %d invalide: %w", i, err)
-			}
-			args[i] = validated
-		}
-	}
-
-	// Exécuter la requête
-	return s.db.Exec(query, args...)
-}
-
 // ValidateUserInput valide spécifiquement les entrées utilisateur
 func ValidateUserInput(input string, fieldName string) error {
 	// Vérifications spécifiques selon le type de champ
@@ -271,26 +214,6 @@ func containsHTML(input string) bool {
 	return matched
 }
 
-// EscapeString échappe une chaîne pour l'usage SQL (en plus des prepared statements)
-func EscapeString(input string) string {
-	// Remplacer les caractères dangereux
-	replacements := map[string]string{
-		"'":    "''",   // Échapper les guillemets simples
-		"\\":   "\\\\", // Échapper les backslashes
-		"\x00": "\\0",  // NULL byte
-		"\n":   "\\n",  // Newline
-		"\r":   "\\r",  // Carriage return
-		"\x1a": "\\Z",  // EOF
-	}
-
-	result := input
-	for old, new := range replacements {
-		result = strings.ReplaceAll(result, old, new)
-	}
-
-	return result
-}
-
 // LogSuspiciousActivity enregistre les tentatives d'injection
 func LogSuspiciousActivity(userID int, input string, endpoint string) {
 	// Dans un vrai projet, enregistrer dans un système de logs sécurisé
@@ -344,22 +267,4 @@ func validateLastName(lastName string) error {
 	}
 
 	return nil
-}
-
-// EscapeHTMLForDisplay échappe les caractères HTML pour l'affichage sécurisé
-func EscapeHTMLForDisplay(input string) string {
-	replacements := map[string]string{
-		"<":  "&lt;",
-		">":  "&gt;",
-		"&":  "&amp;",
-		"\"": "&quot;",
-		"'":  "&#39;",
-	}
-
-	result := input
-	for old, new := range replacements {
-		result = strings.ReplaceAll(result, old, new)
-	}
-
-	return result
 }

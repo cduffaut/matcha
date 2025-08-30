@@ -32,6 +32,8 @@ services:
       - ${PORT}:${PORT}
     networks:
       - matcha-net
+    volumes:
+      - ./web/static/:/app/web/static/
 
 networks:
   matcha-net:

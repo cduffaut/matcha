@@ -155,64 +155,6 @@ func (s *ProfileService) IsUserBlocked(userID, otherUserID int) (bool, error) {
 	return s.profileRepo.IsBlocked(userID, otherUserID)
 }
 
-// UploadPhoto télécharge une photo et l'associe à un utilisateur
-func (s *ProfileService) UploadPhoto(userID int, fileData []byte, filename string, isProfile bool) (*Photo, error) {
-	// Vérifier le nombre de photos existantes
-	photos, err := s.profileRepo.GetPhotosByUserID(userID)
-	if err != nil {
-		return nil, fmt.Errorf("erreur lors de la récupération des photos: %w", err)
-	}
-
-	if len(photos) >= 5 {
-		return nil, errors.New("limite de 5 photos atteinte")
-	}
-
-	// Créer le dossier de l'utilisateur s'il n'existe pas
-	userDir := filepath.Join(s.uploadsDir, fmt.Sprintf("user_%d", userID))
-	if err := os.MkdirAll(userDir, 0755); err != nil {
-		return nil, fmt.Errorf("erreur lors de la création du dossier: %w", err)
-	}
-
-	// Générer un nom de fichier unique
-	ext := filepath.Ext(filename)
-	newFilename := fmt.Sprintf("%d_%d%s", userID, len(photos)+1, ext)
-	filePath := filepath.Join(userDir, newFilename)
-
-	// Enregistrer le fichier
-	if err := os.WriteFile(filePath, fileData, 0644); err != nil {
-		return nil, fmt.Errorf("erreur lors de l'enregistrement du fichier: %w", err)
-	}
-
-	// Construire le chemin relatif pour l'URL
-	urlPath := fmt.Sprintf("/uploads/user_%d/%s", userID, newFilename)
-	if !strings.HasPrefix(urlPath, "/") {
-		urlPath = "/" + urlPath
-	}
-
-	// Si c'est la première photo, ou si isProfile est true, la définir comme photo de profil
-	photo := &Photo{
-		UserID:    userID,
-		FilePath:  urlPath,
-		IsProfile: isProfile || len(photos) == 0,
-	}
-
-	// Ajouter la photo dans la base de données
-	if err := s.profileRepo.AddPhoto(photo); err != nil {
-		// Supprimer le fichier en cas d'erreur
-		os.Remove(filePath)
-		return nil, fmt.Errorf("erreur lors de l'ajout de la photo dans la base de données: %w", err)
-	}
-
-	// Si c'est une photo de profil et qu'il y en a déjà une, mettre à jour
-	if isProfile && len(photos) > 0 {
-		if err := s.profileRepo.SetProfilePhoto(photo.ID); err != nil {
-			return nil, fmt.Errorf("erreur lors de la définition de la photo de profil: %w", err)
-		}
-	}
-
-	return photo, nil
-}
-
 // DeletePhoto supprime une photo
 func (s *ProfileService) DeletePhoto(userID int, photoID int) error {
 	// Récupérer les informations sur la photo
@@ -406,15 +348,6 @@ func (s *ProfileService) CheckIfMatched(user1ID, user2ID int) (bool, error) {
 	return s.profileRepo.CheckIfMatched(user1ID, user2ID)
 }
 
-// GetFameRating récupère le fame rating d'un utilisateur
-func (s *ProfileService) GetFameRating(userID int) (int, error) {
-	profile, err := s.profileRepo.GetByUserID(userID)
-	if err != nil {
-		return 0, fmt.Errorf("erreur lors de la récupération du profil: %w", err)
-	}
-	return profile.FameRating, nil
-}
-
 // UploadPhotoSecure télécharge une photo sécurisée
 func (s *ProfileService) UploadPhotoSecure(userID int, fileData []byte, filename string, isProfile bool) (*Photo, error) {
 	// Vérifier le nombre de photos existantes
@@ -529,16 +462,6 @@ func (s *ProfileService) ReportUser(reporterID, reportedID int, reason string) e
 	}
 
 	return nil
-}
-
-// GetAllReports récupère tous les signalements (pour les admins)
-func (s *ProfileService) GetAllReports() ([]ReportData, error) {
-	return s.profileRepo.GetAllReports()
-}
-
-// ProcessReport traite un signalement
-func (s *ProfileService) ProcessReport(reportID int, adminComment, action string) error {
-	return s.profileRepo.ProcessReport(reportID, adminComment, action)
 }
 
 // IsProfileComplete vérifie si un profil remplit toutes les conditions obligatoires

@@ -1,7 +1,6 @@
 package user
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"html"
@@ -523,31 +522,6 @@ func (h *ProfileHandlers) UploadPhotoHandler(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// Fonction helper pour validation basique d'image
-func isBasicImageValid(data []byte) bool {
-	if len(data) < 12 {
-		return false
-	}
-
-	// Vérifier les magic bytes pour les formats supportés
-	// PNG: 89 50 4E 47
-	if bytes.HasPrefix(data, []byte{0x89, 0x50, 0x4E, 0x47}) {
-		return true
-	}
-
-	// JPEG: FF D8 FF
-	if bytes.HasPrefix(data, []byte{0xFF, 0xD8, 0xFF}) {
-		return true
-	}
-
-	// GIF: GIF87a or GIF89a
-	if bytes.HasPrefix(data, []byte("GIF87a")) || bytes.HasPrefix(data, []byte("GIF89a")) {
-		return true
-	}
-
-	return false
-}
-
 // DeletePhotoHandler supprime une photo de l'utilisateur connecté
 func (h *ProfileHandlers) DeletePhotoHandler(w http.ResponseWriter, r *http.Request) {
 	// Récupérer la session
@@ -705,27 +679,6 @@ func (h *ProfileHandlers) GetUserProfileHandler(w http.ResponseWriter, r *http.R
 		"matched": matched,
 		"blocked": blocked,
 	})
-}
-
-// GetVisitorsHandler récupère les visiteurs du profil de l'utilisateur connecté
-func (h *ProfileHandlers) GetVisitorsHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	session, ok := session.FromContext(r.Context())
-	if !ok {
-		http.Error(w, "Utilisateur non connecté", http.StatusUnauthorized)
-		return
-	}
-
-	// Récupérer les visiteurs
-	visitors, err := h.profileService.GetVisitors(session.UserID)
-	if err != nil {
-		http.Error(w, "Erreur lors de la récupération des visiteurs", http.StatusInternalServerError)
-		return
-	}
-
-	// Répondre avec les visiteurs
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(visitors)
 }
 
 // LikeUserHandler enregistre un "like" pour un utilisateur
@@ -936,27 +889,6 @@ func (h *ProfileHandlers) sendProfileViewNotification(viewedUserID, viewerID int
 	}
 
 	h.sendWebSocketToUser(viewedUserID, wsMessage)
-}
-
-// GetLikesHandler récupère les likes reçus par l'utilisateur connecté
-func (h *ProfileHandlers) GetLikesHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	session, ok := session.FromContext(r.Context())
-	if !ok {
-		http.Error(w, "Utilisateur non connecté", http.StatusUnauthorized)
-		return
-	}
-
-	// Récupérer les likes
-	likes, err := h.profileService.GetLikes(session.UserID)
-	if err != nil {
-		http.Error(w, "Erreur lors de la récupération des likes", http.StatusInternalServerError)
-		return
-	}
-
-	// Répondre avec les likes
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(likes)
 }
 
 // BlockUserHandler bloque un utilisateur

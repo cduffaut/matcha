@@ -2,7 +2,6 @@ package middleware
 
 import (
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cduffaut/matcha/internal/session"
@@ -40,50 +39,6 @@ func (m *OnlineStatusMiddleware) UpdateOnlineStatus(next http.Handler) http.Hand
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// Détermine si c'est une vraie action utilisateur ou une consultation passive
-func (m *OnlineStatusMiddleware) isRealUserAction(r *http.Request) bool {
-	path := r.URL.Path
-	method := r.Method
-
-	// Routes qui NE doivent PAS remettre en ligne (consultations passives)
-	passiveRoutes := []string{
-		"/api/profile/",                   // Consultation de profils
-		"/api/notifications/unread-count", // Compteurs automatiques
-		"/api/chat/unread-count",          // Compteurs automatiques
-		"/static/",                        // Ressources statiques
-		"/uploads/",                       // Images
-	}
-
-	for _, passive := range passiveRoutes {
-		if strings.Contains(path, passive) {
-			// Sauf si c'est une action POST/PUT/DELETE (vraie action)
-			if method == "GET" {
-				return false
-			}
-		}
-	}
-
-	// Routes qui indiquent une vraie activité utilisateur
-	activeRoutes := []string{
-		"/profile",            // Gestion du profil
-		"/browse",             // Navigation/recherche
-		"/chat",               // Page de chat
-		"/notifications",      // Page notifications
-		"/api/profile/tags",   // Gestion des tags
-		"/api/profile/photos", // Gestion des photos
-		"/api/profile/",       // Actions sur profils (like, block, etc.)
-	}
-
-	for _, active := range activeRoutes {
-		if strings.Contains(path, active) {
-			return true
-		}
-	}
-
-	// Par défaut, considérer comme une activité
-	return true
 }
 
 // StartCleanupRoutine démarre la routine de nettoyage automatique
