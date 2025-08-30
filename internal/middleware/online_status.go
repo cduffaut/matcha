@@ -2,64 +2,61 @@ package middleware
 
 import (
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/cduffaut/matcha/internal/session"
 	"github.com/cduffaut/matcha/internal/user"
 )
 
-// OnlineStatusMiddleware met à jour le statut en ligne des utilisateurs
+// met à jour le statut en ligne et nettoie les inactifs.
 type OnlineStatusMiddleware struct {
 	profileService *user.ProfileService
+	cleanupOnce    sync.Once
 }
 
-// NewOnlineStatusMiddleware crée un nouveau middleware de statut en ligne
+// retourne un middleware prêt à l'emploi.
 func NewOnlineStatusMiddleware(profileService *user.ProfileService) *OnlineStatusMiddleware {
-	return &OnlineStatusMiddleware{
-		profileService: profileService,
-	}
+	return &OnlineStatusMiddleware{profileService: profileService}
 }
 
-// UpdateOnlineStatus met à jour le statut en ligne de l'utilisateur
+// UpdateOnlineStatus marque l'utilisateur en ligne de manière asynchrone.
 func (m *OnlineStatusMiddleware) UpdateOnlineStatus(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userSession, ok := session.FromContext(r.Context())
-		if ok {
-			// VÉRIFICATION : Lire le statut AVANT de le modifier
-			m.profileService.GetUserOnlineStatus(userSession.UserID)
+		if sess, ok := session.FromContext(r.Context()); ok {
+			// Lecture avant
+			_, _, _ = m.profileService.GetUserOnlineStatus(sess.UserID)
 
-			go func() {
-				// Marquer comme en ligne
-				err := m.profileService.UpdateUserOnlineStatus(userSession.UserID, true)
-				if err == nil {
-					// VÉRIFICATION : Lire le statut APRÈS modification
-					m.profileService.GetUserOnlineStatus(userSession.UserID)
-				}
-			}()
+			go m.markOnline(sess.UserID)
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-// StartCleanupRoutine démarre la routine de nettoyage automatique
-func (m *OnlineStatusMiddleware) StartCleanupRoutine() {
-	go func() {
-		// CORRECTION : Réduire la fréquence pour éviter de trop nettoyer
-		ticker := time.NewTicker(2 * time.Minute) // Toutes les 2 minutes au lieu de 30s
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				// CORRECTION : Augmenter le timeout pour être moins agressif
-				m.cleanupInactiveUsersDirectly(10) // 10 minutes au lieu de 5
-			}
-		}
-	}()
+func (m *OnlineStatusMiddleware) markOnline(userID int) {
+	defer func() { _ = recover() }() // isolation goroutine
+	if err := m.profileService.UpdateUserOnlineStatus(userID, true); err == nil {
+		// Lecture après
+		_, _, _ = m.profileService.GetUserOnlineStatus(userID)
+	}
 }
 
-// Nettoyage direct via repository
+// lance une routine unique de nettoyage périodique.
+func (m *OnlineStatusMiddleware) StartCleanupRoutine() {
+	m.cleanupOnce.Do(func() {
+		go m.runCleanup(2*time.Minute, 10) // interval=2m, timeout=10m
+	})
+}
+
+func (m *OnlineStatusMiddleware) runCleanup(interval time.Duration, timeoutMinutes int) {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for range t.C {
+		_ = m.cleanupInactiveUsersDirectly(timeoutMinutes)
+	}
+}
+
+// Nettoyage direct via service.
 func (m *OnlineStatusMiddleware) cleanupInactiveUsersDirectly(timeoutMinutes int) error {
-	// Accéder directement au repository via le service
 	return m.profileService.CleanupInactiveUsers(timeoutMinutes)
 }

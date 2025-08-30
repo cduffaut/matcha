@@ -1,49 +1,71 @@
 package middleware
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
-// CSRFMiddleware ajoute une protection CSRF basique
+// bloque les requêtes cross-origin sur méthodes mutantes.
+// Origin prioritaire ; fallback sur Referer si absent.
 func CSRFMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Appliquer CSRF seulement aux requêtes modifiantes
-		if isModifyingRequest(r) {
-			// Vérifier l'en-tête Referer pour une protection basique
-			referer := r.Header.Get("Referer")
-			host := r.Header.Get("Host")
 
-			// Pour les requêtes AJAX/API, vérifier l'origine
-			if isAPIRequest(r) {
-				origin := r.Header.Get("Origin")
-				if origin != "" && !strings.Contains(origin, host) {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusForbidden)
-					w.Write([]byte(`{"error": "CSRF protection: Invalid origin"}`))
+		if isModifyingMethod(r.Method) {
+			origin := r.Header.Get("Origin")
+			if origin != "" {
+				if !sameOrigin(origin, r.Host) {
+					forbidCSRF(w, r, "Invalid origin")
+					return
+				}
+			} else {
+				ref := r.Header.Get("Referer")
+				if ref != "" && !sameOrigin(ref, r.Host) {
+					forbidCSRF(w, r, "Invalid referer")
 					return
 				}
 			}
-
-			// Pour les formulaires, vérifier le referer
-			if referer != "" && !strings.Contains(referer, host) {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusForbidden)
-				w.Write([]byte(`{"error": "CSRF protection: Invalid referer"}`))
-				return
-			}
 		}
 
-		// Ajouter des en-têtes de sécurité
+		// Headers de sécurité légers et sûrs par défaut
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		w.Header().Set("X-XSS-Protection", "1; mode=block")
+		w.Header().Set("Referrer-Policy", "no-referrer")
 
 		next.ServeHTTP(w, r)
 	})
 }
 
-// isModifyingRequest vérifie si c'est une requête qui modifie des données
-func isModifyingRequest(r *http.Request) bool {
-	return r.Method == "POST" || r.Method == "PUT" || r.Method == "DELETE" || r.Method == "PATCH"
+func isModifyingMethod(m string) bool {
+	switch m {
+	case http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete:
+		return true
+	default:
+		return false
+	}
+}
+
+// compare l'hôte (avec port) d'une URL header à r.Host.
+func sameOrigin(u, host string) bool {
+	pu, err := url.Parse(u)
+	if err != nil || pu.Host == "" {
+		return false
+	}
+	// compare insensiblement à la casse ; garde le port si présent.
+	return strings.EqualFold(pu.Host, host)
+}
+
+func forbidCSRF(w http.ResponseWriter, r *http.Request, msg string) {
+	w.WriteHeader(http.StatusForbidden)
+	ct := "text/html; charset=utf-8"
+	if isAPIRequest(r) {
+		ct = "application/json"
+	}
+	w.Header().Set("Content-Type", ct)
+	if ct == "application/json" {
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "CSRF protection: " + msg})
+		return
+	}
+	_, _ = w.Write([]byte("CSRF protection: " + msg))
 }

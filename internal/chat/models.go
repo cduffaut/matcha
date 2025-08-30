@@ -4,7 +4,7 @@ import (
 	"time"
 )
 
-// Message représente un message entre deux utilisateurs
+// message entre deux utilisateurs
 type Message struct {
 	ID          int       `json:"id" db:"id"`
 	SenderID    int       `json:"sender_id" db:"sender_id"`
@@ -18,7 +18,7 @@ type Message struct {
 	SenderName     string `json:"sender_name,omitempty" db:"-"`
 }
 
-// Conversation représente une conversation entre deux utilisateurs
+// conversation entre deux utilisateurs
 type Conversation struct {
 	UserID          int       `json:"user_id"`
 	Username        string    `json:"username"`
@@ -28,7 +28,7 @@ type Conversation struct {
 	LastMessageTime time.Time `json:"last_message_time"`
 }
 
-// MessageRepository interface pour la gestion des messages
+// interface pour la gestion des messages
 type MessageRepository interface {
 	// Créer un nouveau message
 	CreateMessage(message *Message) error
@@ -52,7 +52,7 @@ type MessageRepository interface {
 	CanChat(userID1, userID2 int) (bool, error)
 }
 
-// MessageService interface pour la logique métier des messages
+// interface pour la logique métier des messages
 type MessageService interface {
 	// Envoyer un message
 	SendMessage(senderID, recipientID int, content string) (*Message, error)
@@ -70,13 +70,13 @@ type MessageService interface {
 	GetUnreadCount(userID int) (int, error)
 }
 
-// SendMessageRequest représente une requête d'envoi de message
+// requête d'envoi de message
 type SendMessageRequest struct {
 	RecipientID int    `json:"recipient_id"`
 	Content     string `json:"content"`
 }
 
-// WebSocket message types
+// message types
 const (
 	MessageTypeChat         = "chat_message"
 	MessageTypeNotification = "notification"
@@ -84,14 +84,14 @@ const (
 	MessageTypeAck          = "acknowledgment"
 )
 
-// WebSocketMessage représente un message WebSocket
+// message WebSocket
 type WebSocketMessage struct {
 	Type      string      `json:"type"`
 	Data      interface{} `json:"data"`
 	Timestamp time.Time   `json:"timestamp"`
 }
 
-// ChatMessage représente un message de chat via WebSocket
+// message de chat via WebSocket
 type ChatMessage struct {
 	Message        *Message `json:"message"`
 	ConversationID string   `json:"conversation_id"` // Format: "userID1-userID2"
@@ -104,7 +104,7 @@ type Client struct {
 	Send   chan []byte
 }
 
-// Hub gère les connexions WebSocket
+// gère les connexions WebSocket
 type Hub struct {
 	// Clients connectés indexés par UserID
 	Clients map[int]*Client
@@ -119,7 +119,7 @@ type Hub struct {
 	Broadcast chan []byte
 }
 
-// Run démarre le hub WebSocket
+// démarre le hub WebSocket
 func (h *Hub) Run() {
 	for {
 		select {

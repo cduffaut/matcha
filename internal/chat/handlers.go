@@ -15,329 +15,188 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool {
-		return true // En production, vérifier l'origine
-	},
+	// En prod: restreindre l'origine.
+	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// Handlers gère les requêtes HTTP pour le chat
 type Handlers struct {
 	messageService MessageService
 	hub            *Hub
 }
 
-// NewHandlers crée de nouveaux handlers pour le chat
 func NewHandlers(messageService MessageService, hub *Hub) *Handlers {
-	return &Handlers{
-		messageService: messageService,
-		hub:            hub,
-	}
+	return &Handlers{messageService: messageService, hub: hub}
 }
 
-// SendMessageHandler envoie un message
-func (h *Handlers) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	userSession, ok := session.FromContext(r.Context())
+/* ----------------------------- HTTP HELPERS ------------------------------ */
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func mustSession(w http.ResponseWriter, r *http.Request) (*session.Session, bool) {
+	sess, ok := session.FromContext(r.Context())
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Utilisateur non connecté"})
+		writeError(w, http.StatusUnauthorized, "Utilisateur non connecté")
+		return nil, false
+	}
+	return sess, true
+}
+
+func queryInt(r *http.Request, key string, def, min int) int {
+	v := def
+	if raw := r.URL.Query().Get(key); raw != "" {
+		if i, err := strconv.Atoi(raw); err == nil && i >= min {
+			v = i
+		}
+	}
+	return v
+}
+
+/* -------------------------------- HANDLERS ------------------------------- */
+
+func (h *Handlers) SendMessageHandler(w http.ResponseWriter, r *http.Request) {
+	sess, ok := mustSession(w, r)
+	if !ok {
 		return
 	}
 
-	// Décoder la requête
 	var req SendMessageRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Format de requête invalide"})
+		writeError(w, http.StatusBadRequest, "Format de requête invalide")
 		return
 	}
 
-	// Envoyer le message
-	message, err := h.messageService.SendMessage(userSession.UserID, req.RecipientID, req.Content)
+	msg, err := h.messageService.SendMessage(sess.UserID, req.RecipientID, req.Content)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// ✅ DIFFUSER VIA WEBSOCKET AVANT DE RÉPONDRE
-	h.broadcastMessage(message)
-
-	// ✅ RÉPONDRE AVEC LE MESSAGE CRÉÉ
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(message)
+	h.broadcastMessage(msg)
+	writeJSON(w, http.StatusOK, msg)
 }
 
-// GetConversationHandler récupère les messages d'une conversation
 func (h *Handlers) GetConversationHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	userSession, ok := session.FromContext(r.Context())
+	sess, ok := mustSession(w, r)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Utilisateur non connecté"})
 		return
 	}
 
-	// Récupérer l'ID de l'autre utilisateur
-	otherUserIDStr := pat.Param(r, "userID")
-	otherUserID, err := strconv.Atoi(otherUserIDStr)
+	otherID, err := strconv.Atoi(pat.Param(r, "userID"))
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "ID utilisateur invalide"})
+		writeError(w, http.StatusBadRequest, "ID utilisateur invalide")
 		return
 	}
 
-	// Paramètres de pagination
-	limit := 50
-	offset := 0
+	limit := queryInt(r, "limit", 50, 1)
+	offset := queryInt(r, "offset", 0, 0)
 
-	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
-	}
-
-	if offsetStr := r.URL.Query().Get("offset"); offsetStr != "" {
-		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
-			offset = o
-		}
-	}
-
-	// Récupérer les messages
-	messages, err := h.messageService.GetConversationMessages(userSession.UserID, otherUserID, limit, offset)
+	messages, err := h.messageService.GetConversationMessages(sess.UserID, otherID, limit, offset)
 	if err != nil {
-		// ✅ TOUJOURS RETOURNER UN TABLEAU JSON MÊME EN CAS D'ERREUR
-		w.Header().Set("Content-Type", "application/json")
+		// Toujours retourner un tableau JSON.
 		if strings.Contains(err.Error(), "pas de match") {
-			// Pour un nouveau match, retourner un tableau vide plutôt qu'une erreur
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode([]*Message{})
-		} else {
-			w.WriteHeader(http.StatusInternalServerError)
-			json.NewEncoder(w).Encode([]*Message{})
+			writeJSON(w, http.StatusOK, []*Message{})
+			return
 		}
+		writeJSON(w, http.StatusInternalServerError, []*Message{})
 		return
 	}
-
-	// ✅ S'ASSURER QUE messages N'EST JAMAIS NIL
 	if messages == nil {
 		messages = []*Message{}
 	}
 
-	// Marquer les messages comme lus
-	if err := h.messageService.MarkAsRead(userSession.UserID, otherUserID); err != nil {
-		fmt.Printf("Erreur lors du marquage des messages comme lus: %v\n", err)
-		// Ne pas retourner d'erreur, continuer avec la réponse
+	if err := h.messageService.MarkAsRead(sess.UserID, otherID); err != nil {
+		fmt.Printf("Erreur marquage lus: %v\n", err)
 	}
 
-	// ✅ RÉPONDRE TOUJOURS AVEC UN TABLEAU JSON VALIDE
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(messages)
+	writeJSON(w, http.StatusOK, messages)
 }
 
-// GetConversationsHandler récupère la liste des conversations
 func (h *Handlers) GetConversationsHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	userSession, ok := session.FromContext(r.Context())
+	sess, ok := mustSession(w, r)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Utilisateur non connecté"})
 		return
 	}
 
-	// Récupérer les conversations
-	conversations, err := h.messageService.GetUserConversations(userSession.UserID)
+	convs, err := h.messageService.GetUserConversations(sess.UserID)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode([]*Conversation{}) // Tableau vide en cas d'erreur
+		writeJSON(w, http.StatusInternalServerError, []*Conversation{})
 		return
 	}
-
-	// ✅ S'ASSURER QUE conversations N'EST JAMAIS NIL
-	if conversations == nil {
-		conversations = []*Conversation{}
+	if convs == nil {
+		convs = []*Conversation{}
 	}
 
-	// Répondre avec les conversations
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(conversations)
+	writeJSON(w, http.StatusOK, convs)
 }
 
-// MarkAsReadHandler marque les messages d'une conversation comme lus
 func (h *Handlers) MarkAsReadHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	userSession, ok := session.FromContext(r.Context())
+	sess, ok := mustSession(w, r)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Utilisateur non connecté"})
 		return
 	}
 
-	// Récupérer l'ID de l'autre utilisateur
-	otherUserIDStr := pat.Param(r, "userID")
-	otherUserID, err := strconv.Atoi(otherUserIDStr)
+	otherID, err := strconv.Atoi(pat.Param(r, "userID"))
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": "ID utilisateur invalide"})
+		writeError(w, http.StatusBadRequest, "ID utilisateur invalide")
 		return
 	}
 
-	// Marquer comme lus
-	if err := h.messageService.MarkAsRead(userSession.UserID, otherUserID); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	if err := h.messageService.MarkAsRead(sess.UserID, otherID); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	// Répondre avec succès
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{
-		"message": "Messages marqués comme lus",
-	})
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Messages marqués comme lus"})
 }
 
-// GetUnreadCountHandler récupère le nombre de messages non lus
 func (h *Handlers) GetUnreadCountHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	userSession, ok := session.FromContext(r.Context())
+	sess, ok := mustSession(w, r)
 	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "Utilisateur non connecté"})
 		return
 	}
 
-	// Récupérer le nombre de messages non lus
-	count, err := h.messageService.GetUnreadCount(userSession.UserID)
+	count, err := h.messageService.GetUnreadCount(sess.UserID)
 	if err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusInternalServerError)
-		json.NewEncoder(w).Encode(map[string]int{"unread_count": 0}) // 0 en cas d'erreur
+		writeJSON(w, http.StatusInternalServerError, map[string]int{"unread_count": 0})
 		return
 	}
 
-	// Répondre avec le nombre
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]int{
-		"unread_count": count,
-	})
+	writeJSON(w, http.StatusOK, map[string]int{"unread_count": count})
 }
 
-// ChatPageHandler affiche la page de chat
 func (h *Handlers) ChatPageHandler(w http.ResponseWriter, r *http.Request) {
-	// Récupérer la session
-	userSession, ok := session.FromContext(r.Context())
+	sess, ok := mustSession(w, r)
 	if !ok {
 		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 
-	// Récupérer les conversations pour l'affichage initial
-	conversations, err := h.messageService.GetUserConversations(userSession.UserID)
-	if err != nil {
+	// Pré-chargement (conservé pour logique existante)
+	if _, err := h.messageService.GetUserConversations(sess.UserID); err != nil {
 		http.Error(w, "Erreur lors de la récupération des conversations", http.StatusInternalServerError)
 		return
 	}
 
-	// ✅ PASSER L'ID UTILISATEUR
 	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
-	w.Write([]byte(generateChatHTML(conversations, userSession.UserID)))
+	_, _ = w.Write([]byte(generateChatHTML(nil, sess.UserID)))
 }
 
-// generateChatHTML génère le HTML pour la page de chat
-func generateChatHTML(conversations []*Conversation, userID int) string {
-	html := `<!DOCTYPE html>
-<html lang="fr">
-<head>
-    <title>Messages - Matcha</title>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <link rel="stylesheet" href="/static/css/chat.css">
-	<link rel="stylesheet" href="/static/css/notifications_style_fix.css">
-</head>
-<body>
-    <header>
-        <h1>Matcha</h1>
-        <nav>
-            <a href="/profile">Mon profil</a>
-            <a href="/browse">Explorer</a>
-            <a href="/notifications">Notifications <span id="notification-count"></span></a>
-            <a href="/chat" class="active">Messages <span id="message-count"></span></a>
-            <a href="/logout">Déconnexion</a>
-        </nav>
-    </header>
-    
-    <div class="chat-container">
-        <div class="conversations-list">
-            <h3>Conversations</h3>
-            <div id="conversations">
-                <!-- Les conversations seront chargées ici -->
-            </div>
-        </div>
-        
-		<div class="chat-area">
-			<div class="chat-header" id="chat-header">
-				<span>Sélectionnez une conversation</span>
-			</div>
-			
-			<div class="messages-container" id="messages-container">
-				<div class="chat-placeholder">
-					<p>Sélectionnez une conversation pour commencer à chatter</p>
-				</div>
-			</div>
-			
-			<div class="message-input-container" id="message-input-container" style="display: none;">
-				<form id="message-form">
-					<input type="text" id="message-input" placeholder="Tapez votre message..." maxlength="1000" required>
-					<button type="submit">Envoyer</button>
-				</form>
-			</div>
-		</div>
-    </div>
-    
-    <script>
-        window.currentUserId = ` + strconv.Itoa(userID) + `;
-    </script>
+/* ----------------------------- WEBSOCKET PART ---------------------------- */
 
-	<style>
-	input[type="text"], input[type="email"], input[type="password"], textarea {
-		font-size: 16px !important;
-	}
-	</style>
-    
-	<script src="/static/js/global-error-handler.js"></script>
-    <script src="/static/js/chat.js"></script>
-	<script src="/static/js/notifications_unified.js"></script>
-</body>
-</html>`
-
-	return html
-}
-
-// ✅ AMÉLIORER LA DIFFUSION WEBSOCKET POUR ÉVITER LES DOUBLONS
 func (h *Handlers) broadcastMessage(message *Message) {
 	if h.hub == nil {
 		fmt.Println("Hub WebSocket non disponible")
 		return
 	}
 
-	// Créer le message WebSocket avec un ID unique
 	wsMessage := WebSocketMessage{
 		Type: MessageTypeChat,
 		Data: ChatMessage{
@@ -347,34 +206,27 @@ func (h *Handlers) broadcastMessage(message *Message) {
 		Timestamp: time.Now(),
 	}
 
-	// Convertir en JSON
 	data, err := json.Marshal(wsMessage)
 	if err != nil {
-		fmt.Printf("Erreur lors de la sérialisation du message WebSocket: %v\n", err)
+		fmt.Printf("Erreur sérialisation WS: %v\n", err)
 		return
 	}
 
-	// ✅ DIFFUSER VERS LES DEUX PARTICIPANTS
-	participants := []int{message.SenderID, message.RecipientID}
-	for _, userID := range participants {
-		if client, ok := h.hub.Clients[userID]; ok {
+	for _, uid := range []int{message.SenderID, message.RecipientID} {
+		if client, ok := h.hub.Clients[uid]; ok {
 			select {
 			case client.Send <- data:
-				fmt.Printf("Message WebSocket envoyé à l'utilisateur %d\n", userID)
+				// ok
 			default:
-				// Canal plein, déconnecter le client
-				fmt.Printf("Canal WebSocket plein pour l'utilisateur %d, déconnexion\n", userID)
 				close(client.Send)
-				delete(h.hub.Clients, userID)
+				delete(h.hub.Clients, uid)
 			}
-		} else {
-			fmt.Printf("Client WebSocket non trouvé pour l'utilisateur %d\n", userID)
 		}
 	}
 }
 
 func (h *Handlers) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
-	userSession, ok := session.FromContext(r.Context())
+	sess, ok := session.FromContext(r.Context())
 	if !ok {
 		http.Error(w, "Non autorisé", http.StatusUnauthorized)
 		return
@@ -387,13 +239,14 @@ func (h *Handlers) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{
-		UserID: userSession.UserID,
+		UserID: sess.UserID,
 		Conn:   conn,
 		Send:   make(chan []byte, 256),
 	}
 
 	h.hub.Register <- client
 
+	// Reader
 	go func() {
 		defer func() {
 			h.hub.Unregister <- client
@@ -406,15 +259,78 @@ func (h *Handlers) WebSocketHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
+	// Writer
 	go func() {
 		defer conn.Close()
 		for {
 			select {
-			case message := <-client.Send:
-				if err := conn.WriteMessage(websocket.TextMessage, message); err != nil {
+			case msg := <-client.Send:
+				if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 					return
 				}
 			}
 		}
 	}()
+}
+
+/* --------------------------------- HTML ---------------------------------- */
+
+func generateChatHTML(_ []*Conversation, userID int) string {
+	return fmt.Sprintf(`<!DOCTYPE html>
+<html lang="fr">
+<head>
+	<title>Messages - Matcha</title>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+	<link rel="stylesheet" href="/static/css/chat.css">
+	<link rel="stylesheet" href="/static/css/notifications_style_fix.css">
+</head>
+<body>
+	<header>
+		<h1>Matcha</h1>
+		<nav>
+			<a href="/profile">Mon profil</a>
+			<a href="/browse">Explorer</a>
+			<a href="/notifications">Notifications <span id="notification-count"></span></a>
+			<a href="/chat" class="active">Messages <span id="message-count"></span></a>
+			<a href="/logout">Déconnexion</a>
+		</nav>
+	</header>
+
+	<div class="chat-container">
+		<div class="conversations-list">
+			<h3>Conversations</h3>
+			<div id="conversations"></div>
+		</div>
+
+		<div class="chat-area">
+			<div class="chat-header" id="chat-header">
+				<span>Sélectionnez une conversation</span>
+			</div>
+
+			<div class="messages-container" id="messages-container">
+				<div class="chat-placeholder">
+					<p>Sélectionnez une conversation pour commencer à chatter</p>
+				</div>
+			</div>
+
+			<div class="message-input-container" id="message-input-container" style="display: none;">
+				<form id="message-form">
+					<input type="text" id="message-input" placeholder="Tapez votre message..." maxlength="1000" required>
+					<button type="submit">Envoyer</button>
+				</form>
+			</div>
+		</div>
+	</div>
+
+	<script>window.currentUserId = %d;</script>
+	<style>
+		input[type="text"], input[type="email"], input[type="password"], textarea { font-size: 16px !important; }
+	</style>
+
+	<script src="/static/js/global-error-handler.js"></script>
+	<script src="/static/js/chat.js"></script>
+	<script src="/static/js/notifications_unified.js"></script>
+</body>
+</html>`, userID)
 }

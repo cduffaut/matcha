@@ -1,23 +1,23 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
 
-// Config contient la configuration globale de l'application
+// Config globale de l'application.
 type Config struct {
 	Server   ServerConfig
 	Database DatabaseConfig
 }
 
-// ServerConfig contient la configuration du serveur web
 type ServerConfig struct {
 	Port string
 }
 
-// DatabaseConfig contient la configuration de la base de données
 type DatabaseConfig struct {
 	Host     string
 	Port     string
@@ -26,52 +26,36 @@ type DatabaseConfig struct {
 	Name     string
 }
 
-// Load charge la configuration depuis les variables d'environnement
+// charge la configuration depuis l'environnement.
+// PANIC + debug si une env requise est absente ou vide
 func Load() (*Config, error) {
-	// Charger les variables d'environnement depuis .env si présent
-	_ = godotenv.Load()
+	_ = godotenv.Load() // facultatif
 
-	// Configuration du serveur
-	serverPort := os.Getenv("PORT")
-	if serverPort == "" {
-		serverPort = "8080"
-	}
-
-	// Configuration de la base de données
-	dbHost := os.Getenv("DB_HOST")
-	if dbHost == "" {
-		dbHost = "localhost"
-	}
-
-	dbPort := os.Getenv("DB_PORT")
-	if dbPort == "" {
-		dbPort = "5432"
-	}
-
-	dbUser := os.Getenv("DB_USER")
-	if dbUser == "" {
-		dbUser = "postgres"
-	}
-
-	dbPassword := os.Getenv("DB_PASSWORD")
-
-	dbName := os.Getenv("DB_NAME")
-	if dbName == "" {
-		dbName = "matcha"
-	}
-
-	config := &Config{
+	cfg := &Config{
 		Server: ServerConfig{
-			Port: serverPort,
+			Port: mustEnv("PORT"),
 		},
 		Database: DatabaseConfig{
-			Host:     dbHost,
-			Port:     dbPort,
-			User:     dbUser,
-			Password: dbPassword,
-			Name:     dbName,
+			Host:     mustEnv("DB_HOST"),
+			Port:     mustEnv("DB_PORT"),
+			User:     mustEnv("DB_USER"),
+			Password: mustEnv("DB_PASSWORD"),
+			Name:     mustEnv("DB_NAME"),
 		},
 	}
+	return cfg, nil
+}
 
-	return config, nil
+// retourne la valeur nettoyée ou panique avec un message clair.
+func mustEnv(key string) string {
+	val := strings.TrimSpace(os.Getenv(key))
+	if val == "" {
+		panic(fmt.Sprintf(
+			"CONFIG ERROR: variable d'environnement manquante %q.\n"+
+				"Exemple (.env): %s=<valeur>\n"+
+				"Variables requises: PORT, DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME",
+			key, key,
+		))
+	}
+	return val
 }
