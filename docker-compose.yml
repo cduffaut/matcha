@@ -6,18 +6,17 @@ services:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
-      POSTGRES_HOST: ${DB_HOST}
-      POSTGRES_PORT: ${DB_PORT}
     expose:
       - ${DB_PORT}
     volumes:
-      - ./internal/database/postgresql:/var/lib/postgresql/data
+      - matcha-db-data:/var/lib/postgresql/data
       - ./mock:/mock:ro
     networks:
       - matcha-net
 
   app:
-    build: .
+    build:
+      context: .
     container_name: matcha-app
     environment:
       DB_HOST: matcha-db
@@ -33,7 +32,7 @@ services:
     networks:
       - matcha-net
     volumes:
-      - ./web/static/:/app/web/static/
+      - ./web/static/:/app/web/static/:rw
 
 networks:
   matcha-net:

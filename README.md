@@ -1,7 +1,5 @@
 Lancement de l'application :
 ```bash
-# créer le dossier pour le volume docker de la db
-mkdir -p internal/database/postgresql
 # copier et remplir le fichier .env
 cp .env.example .env
 # lancer le conteneur en arrière-plan
