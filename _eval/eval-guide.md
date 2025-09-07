@@ -44,11 +44,7 @@ A entrer dans un champ de formulaire
 ```
 **Si requete reussie, failed**
 
-### Resultat - ⏳ a corriger
-
-Protection injection SQL :  
-- Biographie de l'user  
-- Tags dans la page Explorer  
+### Resultat - ✅ OK
 
 </details>
 
@@ -127,7 +123,7 @@ No errors must be visible.
 
 **Si erreur non geree, failed**
 
-### Resultat - 
+### Resultat - ⏳ a corriger
 
 Login incorrect :  
 - Erreur 401 affichee dans le terminal 
@@ -514,8 +510,9 @@ Check at least the following points:
 ### Console logs
 
 **A corriger**  
-Erreur visible :
+Erreur visible dans les logs d'erreurs :
 - signaler user : `400 Bad Request`
+- login incorrect : `401 Forbidden` 
 
 ### Design
 
