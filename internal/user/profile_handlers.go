@@ -1131,17 +1131,17 @@ func (h *ProfileHandlers) ProfilePageHandler(w http.ResponseWriter, r *http.Requ
             <h3>Informations personnelles</h3>
             <div class="form-group">
                 <label for="first_name">Prénom *</label>
-                <input type="text" id="first_name" name="first_name" value="%s" required>
+                <input type="text" id="first_name" name="first_name" value="%s" required autocomplete="given-name">
             </div>
             
             <div class="form-group">
                 <label for="last_name">Nom *</label>
-                <input type="text" id="last_name" name="last_name" value="%s" required>
+                <input type="text" id="last_name" name="last_name" value="%s" required autocomplete="family-name">
             </div>
             
             <div class="form-group">
                 <label for="email">Email *</label>
-                <input type="email" id="email" name="email" value="%s" required>
+                <input type="email" id="email" name="email" value="%s" required autocomplete="email">
             </div>
             
             <button type="button" id="update-user-info">Mettre à jour mes informations</button>

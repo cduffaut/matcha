@@ -450,11 +450,11 @@ func (h *Handlers) LoginPageHandler(w http.ResponseWriter, r *http.Request) {
                 <form id="login-form">
                     <div class="form-group">
                         <label for="username">Nom d'utilisateur</label>
-                        <input type="text" id="username" name="username" required>
+                        <input type="text" id="username" name="username" required autocomplete="username">
                     </div>
                     <div class="form-group">
                         <label for="password">Mot de passe</label>
-                        <input type="password" id="password" name="password" required>
+                        <input type="password" id="password" name="password" required autocomplete="current-password">
                     </div>
                     <button type="submit">Se connecter</button>
                 </form>
@@ -486,7 +486,7 @@ func (h *Handlers) ForgotPasswordPageHandler(w http.ResponseWriter, r *http.Requ
                 <form id="forgot-password-form">
                     <div class="form-group">
                         <label for="email">Email</label>
-                        <input type="email" id="email" name="email" required>
+                        <input type="email" id="email" name="email" required autocomplete="email">
                     </div>
                     <button type="submit">Envoyer</button>
                 </form>
@@ -523,12 +523,12 @@ func (h *Handlers) ResetPasswordPageHandler(w http.ResponseWriter, r *http.Reque
             <input type="hidden" id="token" value="%s">
             <div class="form-group">
                 <label for="password">Nouveau mot de passe</label>
-                <input type="password" id="password" name="password" required>
+                <input type="password" id="password" name="password" required autocomplete="new-password">
                 <small>Minimum 8 caractères, 1 majuscule, 1 minuscule, 1 chiffre</small>
             </div>
             <div class="form-group">
                 <label for="confirm-password">Confirmer le mot de passe</label>
-                <input type="password" id="confirm-password" name="confirm-password" required>
+                <input type="password" id="confirm-password" name="confirm-password" required autocomplete="new-password">
             </div>
             <button type="submit">Réinitialiser</button>
         </form>
