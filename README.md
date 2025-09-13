@@ -1,3 +1,14 @@
+<img title="42_matcha" alt="42_matcha" src="./utils/banner.png" width="100%">
+
+<br>
+
+# Matcha
+Application web réalisée dans le cadre du projet Matcha de l’école 42. Plateforme de rencontre mettant en avant la compatibilité entre utilisateurs via des critères comme la localisation, les centres d’intérêt et la popularité. Développée en Go sans ORM, avec une gestion maison de la validation, des sessions et de la sécurité. Interface moderne, performances optimisées et respect strict des contraintes du sujet.
+
+<br>
+
+## Déploiement
+
 Lancement de l'application :
 ```bash
 # copier et remplir le fichier .env
@@ -22,9 +33,6 @@ docker compose down
 docker volume prune -f
 ```
 
-<br>
-
----
 
 <br>
 
@@ -144,3 +152,19 @@ docker volume prune -f
 - **Logique** :  
 	- Tri par zones géographiques (180km, 250km, 350km, 500km)
 	- Puis par score de compatibilité dans chaque zone
+
+---
+
+<br>
+<br>
+
+## Contributeurs
+
+[cduffaut](https://profile.intra.42.fr/users/cduffaut)  
+[cedmulle](https://profile.intra.42.fr/users/cedmulle) 
+
+<br>
+
+## Grade 
+
+> En cours d'évaluation
