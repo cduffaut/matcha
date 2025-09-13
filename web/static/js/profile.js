@@ -13,6 +13,8 @@ document.addEventListener('DOMContentLoaded', function() {
     if (addTagBtn) {
         addTagBtn.addEventListener('click', addTag);
     }
+    // Initialiser les suggestions de tags (comme dans browse.js)
+    initTagSuggestions();
     
     // Gérer l'entrée pour ajouter un tag avec la touche Enter
     const newTagInput = document.getElementById('new-tag');
@@ -214,6 +216,125 @@ function updateTagsDisplay(tags) {
     }
     
     tagsContainer.innerHTML = tagsHTML;
+}
+
+// --- Suggestions de tags (inspiré de browse.js) ---
+let availableTagsForProfile = [];
+
+function initTagSuggestions() {
+	const newTagInput = document.getElementById('new-tag');
+	if (!newTagInput) return;
+
+	// Créer un container de suggestions si absent
+	let suggestionsContainer = document.getElementById('tag-suggestions-profile');
+	if (!suggestionsContainer) {
+		suggestionsContainer = document.createElement('div');
+		suggestionsContainer.id = 'tag-suggestions-profile';
+		suggestionsContainer.className = 'tag-suggestions';
+		suggestionsContainer.style.position = 'absolute';
+		suggestionsContainer.style.zIndex = '1000';
+		suggestionsContainer.style.display = 'none';
+		suggestionsContainer.style.background = 'white';
+		suggestionsContainer.style.border = '1px solid #ddd';
+		suggestionsContainer.style.borderRadius = '4px';
+		suggestionsContainer.style.boxShadow = '0 2px 8px rgba(0,0,0,0.15)';
+		suggestionsContainer.style.maxHeight = '180px';
+		suggestionsContainer.style.overflowY = 'auto';
+
+		// Positionner le container juste après l'input dans le DOM
+		newTagInput.parentElement.style.position = 'relative';
+		newTagInput.parentElement.appendChild(suggestionsContainer);
+	}
+
+	// Charger les tags disponibles une fois
+	loadAvailableTagsForProfile();
+
+	// Écouteurs
+	newTagInput.addEventListener('input', (e) => handleTagInputForProfile(e, suggestionsContainer));
+	newTagInput.addEventListener('keydown', (e) => {
+		if (e.key === 'Escape') {
+			hideSuggestionsForProfile(suggestionsContainer);
+		}
+		if (e.key === 'Enter') {
+			// Empêcher double soumission: si une suggestion est active, sélectionner
+			const first = suggestionsContainer.querySelector('.tag-suggestion');
+			if (first && suggestionsContainer.style.display !== 'none') {
+				e.preventDefault();
+				first.click();
+			} else {
+				// Ajoute le texte entré + le #
+				e.preventDefault();
+				const input = document.getElementById('new-tag');
+				if (input.value.trim()) {
+					input.value = input.value.trim().replace(/^#/, '');
+					input.value = '#' + input.value;
+					addTag(new Event('click'));
+					hideSuggestionsForProfile(suggestionsContainer);
+				}
+			}
+		}
+	});
+
+	// Cacher les suggestions quand on clique ailleurs
+	document.addEventListener('click', (ev) => {
+		if (!ev.target.closest('#tag-suggestions-profile') && !ev.target.closest('#new-tag')) {
+			hideSuggestionsForProfile(suggestionsContainer);
+		}
+	});
+}
+
+async function loadAvailableTagsForProfile() {
+	try {
+		const resp = await fetch('/api/tags');
+		if (!resp.ok) return;
+		const data = await resp.json();
+		if (Array.isArray(data)) {
+			availableTagsForProfile = data.map(t => (t.name || t.Name || t));
+		} else if (data.tags && Array.isArray(data.tags)) {
+			availableTagsForProfile = data.tags.map(t => (t.name || t.Name || t));
+		}
+	} catch (e) {
+		// ignore failures silently
+	}
+}
+
+function handleTagInputForProfile(e, container) {
+	const q = (e.target.value || '').toLowerCase().trim();
+	if (!q || q.length < 1) {
+		hideSuggestionsForProfile(container);
+		return;
+	}
+
+	const query = q.startsWith('#') ? q.substring(1) : q;
+	const suggestions = availableTagsForProfile.filter(t => t && t.toLowerCase().includes(query)).slice(0, 10);
+	if (suggestions.length === 0) {
+		hideSuggestionsForProfile(container);
+		return;
+	}
+
+	container.innerHTML = '';
+	suggestions.forEach(tag => {
+		const div = document.createElement('div');
+		div.className = 'tag-suggestion';
+		div.textContent = tag.startsWith('#') ? tag : `#${tag}`;
+		div.style.padding = '0.5rem';
+		div.style.cursor = 'pointer';
+		div.addEventListener('click', () => {
+			// remplir input et appeler addTag
+			const input = document.getElementById('new-tag');
+			input.value = div.textContent.replace(/^#/, '');
+			input.value = '#' + input.value;
+			addTag(new Event('click'));
+			hideSuggestionsForProfile(container);
+		});
+		container.appendChild(div);
+	});
+	container.style.display = 'block';
+}
+
+function hideSuggestionsForProfile(container) {
+	if (!container) container = document.getElementById('tag-suggestions-profile');
+	if (container) container.style.display = 'none';
 }
 
 // Fonction pour supprimer un tag
