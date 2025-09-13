@@ -923,9 +923,19 @@ document.addEventListener('DOMContentLoaded', function() {
             return;
         }
         
-        container.innerHTML = suggestions.map(tag => `
-            <div class="tag-suggestion" onclick="addTag('${escapeHtml(tag)}')">${escapeHtml(tag)}</div>
-        `).join('');
+		container.innerHTML = '';
+		suggestions.forEach(tag => {
+			const suggestionDiv = document.createElement('div');
+			suggestionDiv.className = 'tag-suggestion';
+			suggestionDiv.textContent = tag;
+			suggestionDiv.addEventListener('click', () => {
+			addTag(tag);
+			const tagInput = document.getElementById('tags-search');
+			if (tagInput) tagInput.value = '';
+			hideSuggestions();
+			});
+			container.appendChild(suggestionDiv);
+		});
         
         container.style.display = 'block';
     }
